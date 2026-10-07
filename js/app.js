@@ -17,6 +17,9 @@ document.getElementById('theme-toggle').onclick=()=>theme(document.documentEleme
 document.getElementById('menu-toggle').onclick=()=>{const open=document.body.classList.toggle('nav-open');document.getElementById('menu-toggle').setAttribute('aria-expanded',String(open));};
 try {
   const manifest=await load('manifest');
+  // Hide the retired view without changing audited workbook bytes used by perk matching.
+  delete manifest.tabs.primaries;
+  manifest.groups=manifest.groups.map(group=>({...group,tabs:group.tabs.filter(id=>id!=='primaries')})).filter(group=>group.tabs.length);
   const nav=document.getElementById('navigation');
   const homeLink=el('a','nav-link','Home');homeLink.href='#/';homeLink.dataset.home='true';nav.append(homeLink);
   const personal=el('div','nav-group');personal.append(el('h2','','Personal tools'));

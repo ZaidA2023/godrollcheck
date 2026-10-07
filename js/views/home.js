@@ -27,7 +27,6 @@ export function home(manifest) {
   const groups=catalogSections(manifest);
   const tabs=groups.flatMap(g=>g.sections);
   const hero=el('div','home-hero');
-  hero.append(el('div','eyebrow','DESTINY 2 / THE ENDGAME FIELD GUIDE'),el('h1','','Build your advantage.'),el('p','page-description','Find your next weapon. Refine your build. Explore the workbook’s rankings, recommendations and endgame analysis.'));
   const stats=el('div','home-stats');
   for(const [count,label] of [[tabs.length,'Workbook sections'],[tabs.reduce((n,t)=>n+t.count,0),'Total entries'],[tabs.filter(t=>t.kind==='weapon').reduce((n,t)=>n+t.count,0),'Ranked weapons']]) {
     const stat=el('div','home-stat');stat.append(el('strong','',count.toLocaleString()),el('span','',label));stats.append(stat);
