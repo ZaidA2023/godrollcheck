@@ -45,7 +45,7 @@ const MASTERWORK_STATS = new Set(['Reload Speed','Range','Handling','Stability',
 function plugValue(hash, def, state, lookup, role) {
   let name = def?.displayProperties?.name, resolved = !!name;
   if (role === 'masterwork') {
-    const stats = (def.investmentStats || []).filter(s => s.value !== 0).map(s => lookup(STAT,s.statTypeHash)?.displayProperties?.name);
+    const stats = (def?.investmentStats || []).filter(s => s.value !== 0).map(s => lookup(STAT,s.statTypeHash)?.displayProperties?.name);
     const unique = [...new Set(stats)];
     resolved = unique.length === 1 && MASTERWORK_STATS.has(unique[0]); name = resolved ? unique[0] : name;
   }
@@ -85,8 +85,8 @@ export function analyzeSockets(rawItem, weapon, sockets, reusable, lookup) {
     const selectedRole = category(inserted,type);
     const status = selected?.resolved && selectedRole === role ? (selected.isEnabled === true ? 'resolved' : selected.isEnabled === false ? 'inactive' : 'unknown') : 'unknown';
     const values = reusable?.plugs?.[index];
-    // Only an instance component on a proven ordinary random-roll socket proves ownership.
-    const rolled = entry.plugSources === 2 && !!entry.randomizedPlugSetHash && !(rawItem.state & 8) && !selected?.enhanced;
+    // Runtime choices belong to this instance; source flags and enhancement are not ownership gates.
+    const rolled = !!rawItem.itemInstanceId && Number.isInteger(rawItem.state) && rawItem.state >= 0 && !(rawItem.state & 8);
     const alternates = Array.isArray(values) ? values.filter(p => String(p.plugItemHash) !== selected?.plugHash).map(p => {
       const def = lookup(ITEM,p.plugItemHash), supported = category(def,type) === role;
       return plugValue(p.plugItemHash,def,{canInsert:p.canInsert,enabled:p.enabled,enableFailIndexes:p.enableFailIndexes || [],insertFailIndexes:p.insertFailIndexes || [],ownership:rolled && supported ? 'rolled' : 'unknown',selectable:rolled && supported && p.canInsert === true && p.enabled === true && !(p.enableFailIndexes?.length) && !(p.insertFailIndexes?.length)},lookup,role);
@@ -94,6 +94,75 @@ export function analyzeSockets(rawItem, weapon, sockets, reusable, lookup) {
     fields[field] = {socketIndex:index,selected,alternates,status,alternateStatus:Array.isArray(values) && rolled ? 'resolved' : 'unknown'};
   }
   return {fields,sockets:socketDetails};
+}
+// Rebuild only retained instance evidence; never read Bungie or mutate saved history.
+export function reconcileSavedInventory(snapshot) {
+  if (snapshot?.schemaVersion !== 1 || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.definitions)) return snapshot;
+  const definitions = new Map(), duplicates = new Set();
+  for (const record of snapshot.definitions) {
+    const key = `${record?.type}/${record?.hash}`;
+    // Reject conflicting definitions rather than choosing whichever happens to come last.
+    if (definitions.has(key)) duplicates.add(key);
+    definitions.set(key,record);
+  }
+  // Each lookup must match the complete saved identity, not merely its hash.
+  const lookup = (type,hash) => {
+    const key = `${type}/${hash}`, record = definitions.get(key);
+    return !duplicates.has(key) && record?.version === snapshot.manifestVersion && record.language === snapshot.language &&
+      record.key === `${snapshot.manifestVersion}/${snapshot.language}/${key}` && String(record.definition?.hash) === String(hash) &&
+      !record.definition?.redacted ? record.definition : undefined;
+  };
+  const completePlug = hash => {
+    const def = lookup(ITEM,hash);
+    // Masterwork names require the actual investment-stat definitions too.
+    const stats = def?.investmentStats ?? [];
+    return !!def && (!/^v\d+\.plugs\.weapons\.masterworks\.stat\./.test(def.plug?.plugCategoryIdentifier || '') ||
+      (Array.isArray(stats) && stats.every(stat => stat && lookup(STAT,stat.statTypeHash))));
+  };
+  const items = snapshot.items.map(item => {
+    try {
+      if (item?.itemType !== 3 || !item.instanceId || !Number.isInteger(item.state) || item.state < 0) return item;
+      const weapon = lookup(ITEM,item.itemHash), entries = weapon?.sockets?.socketEntries;
+      if (!Array.isArray(entries) || !entries.length || !Array.isArray(item.sockets) || item.sockets.length !== entries.length) return item;
+      const sockets = [], plugs = {}, mapped = new Set();
+      // Missing, duplicated or misjoined socket evidence keeps the original visible facts.
+      for (const socket of item.sockets) {
+        const index = socket?.index, entry = entries[index];
+        if (!Number.isInteger(index) || !entry || sockets[index] || String(entry.socketTypeHash) !== socket.socketTypeHash ||
+          !lookup(SOCKET,entry.socketTypeHash) || (entry.singleInitialItemHash && !completePlug(entry.singleInitialItemHash)) ||
+          (socket.selected && !completePlug(socket.selected.plugHash))) return item;
+        sockets[index] = socket.selected ? {plugHash:socket.selected.plugHash,isEnabled:socket.selected.isEnabled,isVisible:socket.selected.isVisible} : {};
+      }
+      // Reconstruct roles before attaching choices; a bad join cannot migrate a perk column.
+      const expected = analyzeSockets({...item,itemInstanceId:item.instanceId},weapon,sockets,null,lookup).fields;
+      for (const name of FIELDS) {
+        const field = item.fields?.[name];
+        if (!field || typeof field !== 'object' || field.ambiguous) return item;
+        if (field.socketIndex !== expected[name].socketIndex) return item;
+        if (field.socketIndex === undefined) { if (field.alternates?.length || field.selected) return item; continue; }
+        const index = field.socketIndex;
+        if (!Number.isInteger(index) || !entries[index] || mapped.has(index) || !Array.isArray(field.alternates)) return item;
+        mapped.add(index);
+        // Both retained selected representations must agree before replacing any legacy facts.
+        const selected = expected[name].selected;
+        if (Boolean(field.selected) !== Boolean(selected) || (selected &&
+          (field.selected.plugHash !== selected.plugHash || field.selected.isEnabled !== selected.isEnabled ||
+           field.selected.isVisible !== selected.isVisible))) return item;
+        // This importer retains rejected instance choices as unknown; potential pools cannot be promoted.
+        if (field.alternates.some(plug => !['unknown','rolled'].includes(plug?.ownership) ||
+          typeof plug.canInsert !== 'boolean' || typeof plug.enabled !== 'boolean' ||
+          !Array.isArray(plug.enableFailIndexes) || !Array.isArray(plug.insertFailIndexes) || !completePlug(plug.plugHash))) return item;
+        if (field.alternates.length || field.alternateStatus === 'resolved') plugs[index] = field.alternates.map(plug => ({plugItemHash:plug.plugHash,canInsert:plug.canInsert,enabled:plug.enabled,
+          enableFailIndexes:plug.enableFailIndexes,insertFailIndexes:plug.insertFailIndexes}));
+      }
+      const analysis = analyzeSockets({...item,itemInstanceId:item.instanceId},weapon,sockets,{plugs},lookup);
+      return {...item,...analysis};
+    } catch {
+      // Malformed saved nested definitions affect only this item, never the whole view.
+      return item;
+    }
+  });
+  return {...snapshot,items};
 }
 export function normalizeProfile(profile, membership, version, definitions) {
   // Validation happens before constructing a complete snapshot envelope.

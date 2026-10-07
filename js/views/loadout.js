@@ -198,10 +198,12 @@ export async function loadout(manifest,params,{signal}={}) {
     const current=()=>!stopped()&&snapshot===ownerSnapshot&&revision===ownerRevision&&inventoryGeneration===ownerGeneration;
     // A replacement resets filters/page/details and builds each indexed comparison once.
     if(entrySnapshot!==snapshot){
-      entrySnapshot=snapshot;inventoryState={query:'',verdict:'all',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50};
+      inventoryState={query:'',verdict:'all',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50};
       // Resolve the saved owner locally; replacement snapshots get fresh browsing defaults.
       // Keep complete saved snapshots intact; only the displayed entries are weapon-only.
-      entries=snapshot?buildEntries(snapshot,comparison,manifest).filter(entry=>entry.type==='weapons'):[];
+      const displaySnapshot=snapshot && inventory?.reconcileSavedInventory?inventory.reconcileSavedInventory(snapshot):snapshot;
+      entries=displaySnapshot?buildEntries(displaySnapshot,comparison,manifest).filter(entry=>entry.type==='weapons'):[];
+      entrySnapshot=snapshot;
       inventoryState.characterId=locationScopes(entries,snapshot?.characters||[],snapshot?.selectedCharacterId).selectedCharacterId;
       if(!snapshot?.characters?.length)inventoryState.tab='vault';
     }
