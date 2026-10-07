@@ -2,7 +2,7 @@ import {el, plain, icon, openItem, setParams, heading} from '../data.js';
 import {table, comment, visibleColumns} from '../components/table.js';
 export function weapons(tab, meta, manifest, params) {
   const page=el('section','weapons-page');
-  page.append(heading(meta,'The rolls worth chasing. Ranked for the endgame.'));
+  page.append(heading(meta));
   const switcher=el('div','type-switcher');
   const label=el('label','','Weapon type'); const select=el('select');select.setAttribute('aria-label','Weapon type');
   manifest.groups.find(g=>g.id==='weapons').tabs.forEach(id=>{const o=el('option','',manifest.tabs[id].title);o.value=id;o.selected=id===tab.id;select.append(o);});

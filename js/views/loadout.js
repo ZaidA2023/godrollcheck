@@ -75,7 +75,7 @@ export async function loadout(manifest,params,{signal}={}) {
   const page=el('section','loadout-page');
   const insecureHttp=location.protocol==='http:';
   let secureLink;
-  const heading=el('div','page-heading');heading.append(el('div','eyebrow','DESTINY 2 / PERSONAL TOOL'),el('h1','','My Inventory'),el('p','page-description','Your saved weapons, compared with the sheet. Account reads happen only when you choose an account or refresh.'));page.append(heading);
+  const heading=el('div','page-heading');heading.append(el('div','eyebrow','DESTINY 2 / PERSONAL TOOL'),el('h1','','My Inventory'));page.append(heading);
   const notice=el('p','loadout-notice');notice.setAttribute('role','status');notice.setAttribute('aria-live','polite');page.append(notice);
   if(insecureHttp){secureLink=el('a','loadout-secure-link','Open hosted HTTPS site ↗');secureLink.href='https://godrollcheck.ut-austin-ed-0958.chatgpt.site/#/loadout';page.append(secureLink);}
   const controls=el('section','loadout-controls');controls.setAttribute('aria-label','Account and saved inventory');

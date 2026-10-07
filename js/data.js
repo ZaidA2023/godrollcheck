@@ -53,6 +53,7 @@ export function externalLink(link) {
 }
 export function heading(meta, subtitle) {
   const block = el('div', 'page-heading');
-  block.append(el('div', 'eyebrow', 'DESTINY 2 / ' + meta.group.toUpperCase()), el('h1', '', meta.title), el('p', 'page-description', subtitle));
+  block.append(el('div', 'eyebrow', 'DESTINY 2 / ' + meta.group.toUpperCase()), el('h1', '', meta.title));
+  if(subtitle)block.append(el('p', 'page-description', subtitle));
   return block;
 }

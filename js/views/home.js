@@ -34,7 +34,7 @@ export function home(manifest) {
   hero.append(stats);page.append(hero);
   const tools=el('section','personal-tools');tools.append(el('h2','','Personal tools'));
   const loadout=el('a','catalog-card personal-tool');loadout.href='#/loadout';
-  loadout.append(el('h3','','My Inventory'),el('p','','Browse every saved inventory item and highlight complete recommendation matches. Refresh and save only when you choose.'),el('span','catalog-arrow','Open My Inventory ↗'));tools.append(loadout);page.append(tools);
+  loadout.append(el('h3','','My Inventory'),el('span','catalog-arrow','Open My Inventory ↗'));tools.append(loadout);page.append(tools);
   const header=el('div','catalog-header');const intro=el('div');intro.append(el('h2','','Explore the catalog'),el('p','muted','Every section, organized by what you’re looking for.'));
   const search=el('input');search.type='search';search.placeholder='Find a section…';search.setAttribute('aria-label','Search catalog sections');header.append(intro,search);page.append(header);
   const summary=el('p','catalog-summary');summary.setAttribute('role','status');
@@ -50,7 +50,8 @@ export function home(manifest) {
       const grid=el('div','catalog-grid');
       for(const tab of sections) {
         const card=el('a','catalog-card');card.href=tab.route;
-        card.append(el('h4','',tab.title),el('p','',tab.description));
+        card.append(el('h4','',tab.title));
+        if(tab.kind!=='weapon'&&tab.id!=='exotic-weapons')card.append(el('p','',tab.description));
         const footer=el('div','catalog-card-footer');footer.append(el('span','',`${tab.count.toLocaleString()} entries`),el('span','catalog-arrow','↗'));card.append(footer);grid.append(card);
       }
       section.append(grid);catalog.append(section);
