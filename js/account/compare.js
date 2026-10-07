@@ -43,29 +43,34 @@ function knownIdentity(plug,field,map) {
   }
   return true;
 }
-// Hash matches are unique; name-only references can display text but never a verdict.
+// A unique exact name shares recommendations across versions under the user policy.
 export function compareItem(item, map, tables) {
   const usableTables = (tables || []).filter(t => t.id !== 'primaries' && (t.kind === 'weapon' || t.id === 'exotic-weapons'));
   const exact = usableTables.flatMap(tab => (tab.records || []).filter(r => r.itemHash != null && String(r.itemHash) === String(item.itemHash)).map(record => ({record,tabId:tab.id})));
   const possible = usableTables.flatMap(tab => (tab.records || []).filter(r => sameName(r.name,item.name)).map(record => ({record,tabId:tab.id})));
   // Aliases are explicit audited hashes; runtime name stripping never establishes identity.
-  const alias = exact.length === 0 ? map?.variants?.[String(item.itemHash)] : null;
+  const nameReferenceRow = exact.length === 0 && possible.length === 1 ? possible[0] : null;
+  const alias = exact.length === 0 && possible.length === 0 ? map?.variants?.[String(item.itemHash)] : null;
   const hash = value => /^\d{1,10}$/.test(String(value)) && Number(value) > 0 && Number(value) <= 4294967295;
   const optionsValid = alias?.verifiedOptions && typeof alias.verifiedOptions === 'object' && !Array.isArray(alias.verifiedOptions) && FIELD_NAMES.every(field => Array.isArray(alias.verifiedOptions[field]) && alias.verifiedOptions[field].every(name => typeof name === 'string' && name.trim()));
   const aliasValid = alias?.approved === true && hash(item.itemHash) && hash(alias.baseHash) && typeof alias.name === 'string' && alias.name.trim() && typeof alias.baseName === 'string' && alias.baseName.trim() && sameName(alias.name,item.name) && optionsValid;
   const bases = aliasValid ? usableTables.flatMap(tab => (tab.records || []).filter(record => String(record.itemHash) === String(alias.baseHash)).map(record => ({record,tabId:tab.id,kind:tab.kind}))) : [];
   const aliasReference = bases.length === 1 && bases[0].kind === 'weapon' && bases[0].tabId === alias.tabId && bases[0].record.id === alias.sheetId && sameName(bases[0].record.name,alias.baseName) ? bases[0] : null;
-  const reference = exact.length === 1 ? exact[0] : exact.length === 0 && aliasReference ? aliasReference : possible.length === 1 ? possible[0] : null;
+  // Never let a name or alias resolve a collision in a higher-priority path.
+  const reference = exact.length === 1 ? exact[0] : exact.length === 0 ? nameReferenceRow || aliasReference : null;
   let reason = null;
   if (item.itemType !== 3) reason = 'Unsupported item type';
-  else if (exact.length !== 1 && !aliasReference) reason = exact.length > 1 ? 'Ambiguous sheet weapon identity' : possible.length ? 'Possible name-only sheet reference; Review required' : 'Not covered by this sheet';
+  else if (!reference) reason = exact.length > 1 || possible.length > 1 ? 'Ambiguous sheet weapon identity' : 'Not covered by this sheet';
+  else if (nameReferenceRow && (!hash(item.itemHash) || ![item.name,reference.record.name,reference.record.id,reference.tabId].every(value => typeof value === 'string' && value.trim()))) reason = 'Weapon name reference needs review';
   else if (!validMap(map,item)) reason = 'Mapping fingerprint or manifest version mismatch; Review required';
-  else {
+  else if (!nameReferenceRow) {
     // The base identity remains audited even when an approved variant points to its row.
     const identity = map.weapons?.[String(reference.record.itemHash)];
     const expectedName = aliasReference ? alias.baseName : item.name;
     if (!identity || identity.sheetId !== reference.record.id || identity.tabId !== reference.tabId || map.unresolved?.[reference.record.id]?.identity || !sameName(reference.record.name,expectedName)) reason = 'Weapon identity needs review';
   }
+  // Exact-name sharing establishes a recommendation reference, not identical roll pools.
+  const nameReference = !reason && nameReferenceRow ? {verified:true,itemHash:String(item.itemHash),name:item.name,sheetId:reference.record.id,tabId:reference.tabId} : null;
   const variant = !reason && aliasReference ? {verified:true,itemHash:String(item.itemHash),baseHash:String(reference.record.itemHash),name:alias.name,baseName:alias.baseName} : null;
   // Exotics retain descriptive sheet context without fabricated random-roll fields.
   const {record = null,tabId = null} = reference || {};
@@ -94,7 +99,7 @@ export function compareItem(item, map, tables) {
   }
   const traitStatuses = [fields.perk1.status,fields.perk2.status], count = traitStatuses.filter(s => s === 'match').length;
   const status = reason ? 'unknown' : count === 2 ? 'both-match' : count === 1 ? 'one-match' : traitStatuses.includes('unknown') ? 'unknown' : traitStatuses.every(s => s === 'no-recommendation') ? 'no-recommendation' : 'different';
-  return {record,tabId,status,fields,reason,variant};
+  return {record,tabId,status,fields,reason,variant,nameReference};
 }
 // Copies stay distinct; Postmaster and unrelated weapon types cannot enter this list.
 export function ownedAlternatives(item, snapshot, map, tables) {

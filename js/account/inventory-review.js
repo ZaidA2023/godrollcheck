@@ -24,7 +24,10 @@ export function classifyItem(item, comparison = {}, meta, rarity = 'unverified')
   const identityName = value => normalize(value).replace(/[‘’]/g,"'").replace(/[“”]/g,'"').replace(/\s+/g,' ');
   // Exact evidence binds both names and hashes; a merely similar name earns no alias credit.
   const variantExact = evidence && typeof evidence === 'object' && !Array.isArray(evidence) && evidence.verified === true && hash(evidence.itemHash) && hash(evidence.baseHash) && typeof evidence.name === 'string' && evidence.name.trim() && typeof evidence.baseName === 'string' && evidence.baseName.trim() && evidence.itemHash === String(item.itemHash) && evidence.baseHash === String(comparison.record?.itemHash) && identityName(evidence.name) === identityName(item.name) && identityName(evidence.baseName) === identityName(comparison.record?.name);
-  const exact = comparison.record?.itemHash != null && (String(comparison.record.itemHash) === String(item.itemHash) || Boolean(variantExact));
+  // Name evidence binds the owned hash to one exact-name sheet row, even without a sheet hash.
+  const named = comparison.nameReference;
+  const nameExact = named && typeof named === 'object' && !Array.isArray(named) && named.verified === true && hash(named.itemHash) && named.itemHash === String(item.itemHash) && ['name','sheetId','tabId'].every(key => typeof named[key] === 'string' && named[key].trim()) && typeof item.name === 'string' && item.name.trim() && typeof comparison.record?.name === 'string' && comparison.record.name.trim() && identityName(named.name) === identityName(item.name) && identityName(named.name) === identityName(comparison.record.name) && named.sheetId === comparison.record.id && named.tabId === comparison.tabId;
+  const exact = (comparison.record?.itemHash != null && (String(comparison.record.itemHash) === String(item.itemHash) || Boolean(variantExact))) || Boolean(nameExact);
   const eligible = Number(item.itemType) === 3 && rarity === 'legendary' && meta?.kind === 'weapon' && comparison.tabId !== 'exotic-weapons' && exact && !comparison.reason;
   // Whole-record failures disallow all credit; unresolved fields only lose their own point.
   const scored = Boolean(eligible && required.length > 0);
