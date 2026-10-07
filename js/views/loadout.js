@@ -1,5 +1,5 @@
 import {el, load, plain, openItem} from '../data.js';
-import {buildEntries, selectEntries, locationScopes} from '../account/inventory-review.js';
+import {buildEntries, selectEntries, locationScopes, newWeaponEntries} from '../account/inventory-review.js';
 
 const fieldLabels={barrel:'Barrel / string / blade',mag:'Magazine / battery / guard',masterwork:'Masterwork',perk1:'Perk column 1',perk2:'Perk column 2',originTrait:'Origin trait'};
 const isPostmaster=item=>item.isPostmaster||String(item.bucketHash)==='215593132'||/postmaster/i.test(String(item.location));
@@ -221,15 +221,16 @@ export async function loadout(manifest,params,{signal}={}) {
       if(!current()||busy||inventoryState.tab===tab)return;
       inventoryState.tab=tab;resetPages();inventoryState.disclosures={};renderScope();
     }
-    for(const [value,label] of [['characters','Characters'],['vault','Vault']]){
+    for(const [value,label] of [['characters','Characters'],['vault','Vault'],['new','New weapons']]){
       const button=el('button','inventory-tab',label);button.id=`inventory-tab-${value}`;
       button.setAttribute('role','tab');button.setAttribute('aria-controls',panel.id);
       button.onclick=()=>switchTab(value);tabButtons.push({node:button,value});tabs.append(button);inventoryControls.push({node:button});
-      // Automatic activation wraps across the two tabs without detaching focus.
+      // Automatic activation wraps across all tabs without detaching focus.
       button.addEventListener('keydown',event=>{
         if(!current()||busy)return;
         const index=tabButtons.findIndex(tab=>tab.node===button);
-        const next=event.key==='Home'?0:event.key==='End'?1:event.key==='ArrowLeft'||event.key==='ArrowRight'?1-index:null;
+        const count=tabButtons.length;
+        const next=event.key==='Home'?0:event.key==='End'?count-1:event.key==='ArrowLeft'?(index+count-1)%count:event.key==='ArrowRight'?(index+1)%count:null;
         if(next==null)return;event.preventDefault();switchTab(tabButtons[next].value);tabButtons[next].node.focus();
       });
     }
@@ -267,7 +268,7 @@ export async function loadout(manifest,params,{signal}={}) {
           inventoryState.characterId=selector.value;resetPages();inventoryState.disclosures={};
           scopes=locationScopes(entries,snapshot.characters,inventoryState.characterId);renderSections();
         };
-      } else scopeHeading.append(el('h2','',inventoryState.tab==='vault'?'Vault':'Characters'));
+      } else scopeHeading.append(el('h2','',inventoryState.tab==='new'?'New weapons':inventoryState.tab==='vault'?'Vault':'Characters'));
       renderSections();
     }
     function renderSections(){
@@ -278,10 +279,14 @@ export async function loadout(manifest,params,{signal}={}) {
       main.replaceChildren();auxiliary.replaceChildren();
       const character=snapshot.characters.find(c=>String(c.id)===inventoryState.characterId);
       const owner=character?`${character.className||'Character'} · ${character.id}`:'Characters';
-      const title=inventoryState.tab==='vault'?'Vault':`${owner} — equipped and carried`;
-      renderList(main,inventoryState.tab==='vault'?scopes.vault:scopes.character,'main',title,sectionCurrent);
+      // One account-wide list reuses ranked entries; no location grouping or extra comparisons.
+      const isNew=inventoryState.tab==='new';
+      const title=isNew?'New weapons':inventoryState.tab==='vault'?'Vault':`${owner} — equipped and carried`;
+      if(isNew&&snapshot.previousRefresh)main.append(el('p','muted',`Compared with the previous saved refresh: ${timestamp(snapshot.previousRefresh.savedAt)}`));
+      const scopedEntries=isNew?newWeaponEntries(entries,snapshot.previousRefresh):inventoryState.tab==='vault'?scopes.vault:scopes.character;
+      renderList(main,scopedEntries,'main',title,sectionCurrent);
       if(inventoryState.tab==='characters'&&scopes.postmaster.length)renderDisclosure(scopes.postmaster,'postmaster',`Postmaster · ${owner}`,sectionCurrent);
-      if(scopes.other.length)renderDisclosure(scopes.other,'other','Account / other',sectionCurrent);
+      if(!isNew&&scopes.other.length)renderDisclosure(scopes.other,'other','Account / other',sectionCurrent);
       updateControls();
     }
     // Auxiliary stores remain separate from carried/vault rows and paginate independently.
@@ -306,7 +311,11 @@ export async function loadout(manifest,params,{signal}={}) {
         const generation=++pageGeneration;const rowCurrent=()=>sectionCurrent()&&pageGeneration===generation;
         count.textContent=`${title}: Showing ${selection.from}–${selection.to} of ${selection.filteredCount.toLocaleString()} filtered / ${selection.totalCount.toLocaleString()} weapons · ${selection.completeCount.toLocaleString()} complete matches in this section`;
         list.replaceChildren(...selection.rows.map(entry=>inventoryRow(entry,rowCurrent)));
-        if(!selection.rows.length)list.append(el('p','empty-state',!snapshot.characters.length&&inventoryState.tab==='characters'&&key==='main'?'This saved profile has no characters. Choose Vault to browse stored items.':'No weapons match these filters.'));
+        if(!selection.rows.length){
+          // A first/legacy save has no baseline; unchanged saves are a distinct empty state.
+          const empty=inventoryState.tab==='new'&&key==='main'?(!snapshot.previousRefresh?'No previous refresh is available. Refresh and Save again to compare newly added weapons.':!scopedEntries.length?'No new weapons since the previous saved refresh.':'No new weapons match these filters.'):!snapshot.characters.length&&inventoryState.tab==='characters'&&key==='main'?'This saved profile has no characters. Choose Vault to browse stored items.':'No weapons match these filters.';
+          list.append(el('p','empty-state',empty));
+        }
         // Page generation invalidates detached lazy details and their sheet references.
         pageLabel.textContent=`Page ${selection.page} of ${selection.pageCount}`;
         previous.onclick=()=>{if(!rowCurrent()||busy||selection.page<=1)return;inventoryState.pages[key]=selection.page-1;renderRows();};
@@ -367,8 +376,8 @@ export async function loadout(manifest,params,{signal}={}) {
     if(!Number.isFinite(Date.parse(next.responseMintedTimestamp)))throw new Error('The import has no valid Bungie timestamp. Nothing was saved.');
     if(!Array.isArray(next.characters)||!Array.isArray(next.items))throw new Error('The import is incomplete. Nothing was saved.');
     // Storage owns atomicity, freshness and cancellation up to transaction commit.
-    await storage.saveSnapshot(next,{signal:actionSignal});if(!current())return;
-    snapshot=next;renderGear();report('Saved. This inventory is available offline in this browser.');
+    const committed=await storage.saveSnapshot(next,{signal:actionSignal});if(!current())return;
+    snapshot=committed||next;renderGear();report('Saved. This inventory is available offline in this browser.');
     try{await savedList(current);}catch{if(current())report('Inventory saved, but the saved-account list could not be updated.',true);}
   });
   disconnect.onclick=async()=>{

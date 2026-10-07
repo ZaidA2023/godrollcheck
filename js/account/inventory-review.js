@@ -100,3 +100,10 @@ export function selectEntries(entries, {query='',type='all',location='all',verdi
   const start = (selectedPage-1)*size;
   return {rows:filtered.slice(start,start+size),filteredCount:filtered.length,totalCount:entries.length,page:selectedPage,pageCount,from:filtered.length ? start+1 : 0,to:Math.min(start+size,filtered.length),completeCount:entries.filter(entry => entry.verdict.complete).length};
 }
+
+// New means a newly appearing owned copy; location, hashes and chosen perks are irrelevant.
+export function newWeaponEntries(entries, previousRefresh) {
+  if (!Array.isArray(previousRefresh?.weaponInstanceIds)) return [];
+  const previous = new Set(previousRefresh.weaponInstanceIds);
+  return entries.filter(entry => Number(entry.item.itemType) === 3 && typeof entry.item.instanceId === 'string' && entry.item.instanceId && !previous.has(entry.item.instanceId));
+}

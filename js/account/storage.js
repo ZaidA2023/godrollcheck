@@ -42,6 +42,19 @@ async function read(store, key) {
   // Close the connection on read failure as well as success.
   }); } finally { db.close(); }
 }
+// Invalid historical evidence disables only the new-weapons baseline, not current inventory.
+async function withPreviousRefresh(snapshot, previous) {
+  let previousRefresh = null;
+  try {
+    if (previous) {
+      const prior = validateSnapshot(previous.snapshot);
+      if (prior.accountKey === snapshot.accountKey && Date.parse(prior.responseMintedTimestamp) <= Date.parse(snapshot.responseMintedTimestamp) && previous.integritySha256 && await digest(prior) === previous.integritySha256) {
+        previousRefresh = {savedAt:prior.savedAt,weaponInstanceIds:prior.items.filter(item => Number(item.itemType) === 3 && typeof item.instanceId === 'string' && item.instanceId).map(item => item.instanceId)};
+      }
+    }
+  } catch { /* A malformed baseline must not turn a committed save into an apparent failure. */ }
+  return {...snapshot,previousRefresh};
+}
 export async function loadSnapshot(accountKey) {
   if (accountKey === undefined) {
     const session = getSession();
@@ -52,13 +65,15 @@ export async function loadSnapshot(accountKey) {
   const record = await read('snapshots', accountKey); if (!record) return null;
   validateSnapshot(record.snapshot);
   if (!record.integritySha256 || await digest(record.snapshot) !== record.integritySha256) throw new Error('Saved inventory fingerprint is invalid. Import again or clear this saved account.');
-  return record.snapshot;
+  return withPreviousRefresh(record.snapshot,record.previous);
 }
 export async function saveSnapshot(snapshot, {signal} = {}) {
   // Clone before yielding so caller mutations cannot diverge snapshot/cache content.
   snapshot = structuredClone(validateSnapshot(snapshot));
+  // Derived browsing metadata is never hashed into snapshots or recursively retained.
+  delete snapshot.previousRefresh;
   const operation = operationSignal(signal);
-  let db;
+  let db, previous = null;
   try {
     operation.signal.throwIfAborted();
     const integritySha256 = await digest(snapshot);
@@ -80,11 +95,13 @@ export async function saveSnapshot(snapshot, {signal} = {}) {
       const old = snapshots.get(snapshot.accountKey);
       // Freshness is checked inside the write transaction, including competing saves.
       old.onsuccess = () => {
-        if (old.result && Date.parse(old.result.snapshot.responseMintedTimestamp) > Date.parse(snapshot.responseMintedTimestamp)) {
+        if (old.result && Date.parse(old.result?.snapshot?.responseMintedTimestamp) > Date.parse(snapshot.responseMintedTimestamp)) {
           failure = new Error('Bungie returned an older inventory. The newer saved snapshot was retained.'); tx.abort(); return;
         }
         // Every write belongs to the same transaction: no partial definition cache.
-        snapshots.put({accountKey:snapshot.accountKey,snapshot,integritySha256});
+        // Keep exactly the previous committed current snapshot, never its history chain.
+        previous = old.result ? {snapshot:old.result.snapshot,integritySha256:old.result.integritySha256} : null;
+        snapshots.put({accountKey:snapshot.accountKey,snapshot,integritySha256,previous});
         for (const entry of snapshot.definitions) tx.objectStore('definitions').put(entry);
         tx.objectStore('local').put({key:'selectedAccount',value:snapshot.accountKey});
       };
@@ -92,7 +109,7 @@ export async function saveSnapshot(snapshot, {signal} = {}) {
     // Remember a successful explicit refresh for reload; this never resolves memberships.
     const session = getSession();
     if (session?.memberships?.some(m => `${m.membershipType}:${m.membershipId}` === snapshot.accountKey)) selectAccount(snapshot.accountKey);
-    return snapshot;
+    return await withPreviousRefresh(snapshot,previous);
   } finally { db?.close(); operation.dispose(); }
 }
 export async function listSnapshots() {
