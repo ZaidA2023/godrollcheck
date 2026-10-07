@@ -4,17 +4,22 @@ export async function loadConfig() {
   const response = await fetch(new URL('../../account-config.json', import.meta.url));
   if (!response.ok) throw new Error('Bungie connection is not configured for this site.');
   const raw = await response.json();
+  // Validate deployment prefixes before producing even a recovery link.
+  callbackPath(raw);
   const origin = globalThis.location.origin;
   const config = origin === raw.development?.origin ? {...raw, ...raw.development} : raw;
+  const registeredPath=callbackPath(config);
   if (!config.apiKey || !/^\d+$/.test(String(config.clientId))) throw new Error('The Bungie application settings are incomplete.');
   if (origin !== config.origin || !origin.startsWith('https://')) {
     const error = new Error('Open the HTTPS site to connect Bungie.');
-    error.secureUrl = new URL(raw.basePath||'/',raw.origin).href;
+    const secure=new URL(raw.basePath??'/',raw.origin);
+    if(secure.origin!==raw.origin)throw new Error('The configured website origin is invalid.');
+    error.secureUrl = secure.href;
     throw error;
   }
   // The registered destination is fixed; incoming query parameters are separate.
   const redirect = new URL(config.redirectUri);
-  if (redirect.origin !== origin || redirect.pathname !== callbackPath(config) || redirect.search || redirect.hash) throw new Error('The Bungie callback configuration is invalid.');
+  if (redirect.origin !== origin || redirect.pathname !== registeredPath || redirect.search || redirect.hash) throw new Error('The Bungie callback configuration is invalid.');
   return {apiKey: config.apiKey, clientId: String(config.clientId), origin, basePath:config.basePath??'/', redirectUri: redirect.href};
 }
 
