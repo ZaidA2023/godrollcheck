@@ -185,7 +185,10 @@ export function normalizeProfile(profile, membership, version, definitions) {
     const liveSockets = profile.itemComponents?.sockets?.data?.[instanceId]?.sockets;
     if (instanceId && weapon && def.sockets?.socketEntries?.length) required(Array.isArray(liveSockets) && liveSockets.length >= def.sockets.socketEntries.length,`weapon sockets ${instanceId} missing`);
     const analysis = instanceId && weapon ? analyzeSockets(raw,def,liveSockets,profile.itemComponents?.reusablePlugs?.data?.[instanceId],lookup) : {fields:{},sockets:[]};
-    const item = {...raw,instanceId,itemHash:String(raw.itemHash),name:def.displayProperties?.name || 'Unnamed item',icon:iconUrl(def.displayProperties?.icon),itemType:def.itemType,itemSubType:def.itemSubType,bucketHash:bucketHash == null ? null : String(bucketHash),equipmentBucketHash:String(def.inventory?.bucketTypeHash || bucketHash || ''),bucketName:bucket?.displayProperties?.name || '',characterId:container.characterId,location,equipped:container.location === 'equipment',quantity:raw.quantity,manifestVersion:version,...analysis};
+    // Weapon Power comes from this instance's primary stat, never its level or definition.
+    const primaryPower = profile.itemComponents?.instances?.data?.[instanceId]?.primaryStat?.value;
+    const power = weapon && Number.isInteger(primaryPower) && primaryPower >= 0 ? primaryPower : null;
+    const item = {...raw,power,instanceId,itemHash:String(raw.itemHash),name:def.displayProperties?.name || 'Unnamed item',icon:iconUrl(def.displayProperties?.icon),itemType:def.itemType,itemSubType:def.itemSubType,bucketHash:bucketHash == null ? null : String(bucketHash),equipmentBucketHash:String(def.inventory?.bucketTypeHash || bucketHash || ''),bucketName:bucket?.displayProperties?.name || '',characterId:container.characterId,location,equipped:container.location === 'equipment',quantity:raw.quantity,manifestVersion:version,...analysis};
     items.push(item);
     if (item.equipped && instanceId) equipmentByCharacter[container.characterId].push(instanceId);
   }

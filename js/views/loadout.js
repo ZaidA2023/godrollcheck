@@ -60,6 +60,27 @@ function availablePerks(field, imported, verdict, inventoryVerdict) {
   }
   return line;
 }
+// Presentation-only public icon lookup cannot affect comparison or owned evidence.
+function recommendedPerks(field, values, index, target) {
+  const line=target||el('p','inventory-recommendations');
+  line.replaceChildren();line.append(el('span','','Recommended: '));
+  const list=(Array.isArray(values)?values:values==null?[]:[values]).map(value=>typeof value==='object'?value?.text??value?.name??'':String(value)).filter(Boolean);
+  if(!list.length){line.append(el('span','','No recommendation'));return line;}
+  for(const [offset,name] of list.entries()){
+    if(offset)line.append(el('span','',' · '));
+    const option=el('span','inventory-recommendation');
+    const key=String(name).normalize('NFKC').trim().toLocaleLowerCase('en').replace(/\s+/g,' ');
+    const path=index?.[field]?.[key];
+    // Only the official static icon directory is admitted; missing icons retain their labels.
+    if(typeof path==='string'&&/^\/common\/destiny2_content\/icons\/[a-f0-9]+\.(png|jpg|webp)$/.test(path)){
+      const image=el('img','inventory-recommendation-icon');image.src=`https://www.bungie.net${path}`;
+      image.alt='';image.setAttribute('aria-hidden','true');image.width=20;image.height=20;image.loading='lazy';image.referrerPolicy='no-referrer';
+      image.onerror=()=>image.remove();option.append(image);
+    }
+    option.append(el('span','',name));line.append(option);
+  }
+  return line;
+}
 function bungieIcon(path,name) {
   if(typeof path!=='string'||!path.trim())return el('span','icon-placeholder','◇');
   // Only Bungie's static content directory can supply imported images.
@@ -90,7 +111,8 @@ export async function loadout(manifest,params,{signal}={}) {
   const savedMeta=el('div','loadout-saved-meta');const gear=el('div','loadout-gear');page.append(savedMeta,gear);
   const clear=el('button','','Clear saved inventory');const confirmation=el('div','loadout-confirm');confirmation.hidden=true;
   const confirmClear=el('button','','Delete this saved account');const cancelClear=el('button','','Keep saved inventory');confirmation.append(el('p','','Delete the saved inventory for this account from this browser?'),confirmClear,cancelClear);controls.append(clear,confirmation);
-  let auth,storage,inventory,compare,config,map,tables=[],snapshot=null,memberships=[],membership=null,savedAccounts=[],entrySnapshot,entries=[],inventoryState={query:'',verdict:'all',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50},inventoryGeneration=0,inventoryControls=[],busy=false,disconnecting=false,operation,revision=0;
+  const recommendationDisplays=new Set();
+  let auth,storage,inventory,compare,config,map,perkIcons={},tables=[],snapshot=null,memberships=[],membership=null,savedAccounts=[],entrySnapshot,entries=[],inventoryState={query:'',verdict:'all',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50},inventoryGeneration=0,inventoryControls=[],busy=false,disconnecting=false,operation,revision=0;
   const stopped=()=>signal?.aborted;
   const startupRevision=revision;const startupCurrent=()=>!stopped()&&revision===startupRevision;
   const cancel=()=>{revision++;operation?.abort();busy=false;};
@@ -123,21 +145,22 @@ export async function loadout(manifest,params,{signal}={}) {
   function itemDetails(entry,current) {
     const {item,comparison:result}=entry;const detail=el('div','inventory-detail-content');
     const record=result?.record;const meta=manifest.tabs[result?.tabId];
-    detail.append(el('p','muted',`${entry.locationLabel}${item.instanceId?` · Instance ${item.instanceId}`:` · Inventory entry ${entry.index+1}`}${item.bucketName?` · ${item.bucketName}`:''}`));
-    if(result?.reason)detail.append(el('p','muted',result.reason));
+    const context=el('div','inventory-weapon-context');
+    context.append(el('p','muted',`${entry.locationLabel}${item.instanceId?` · Instance ${item.instanceId}`:` · Inventory entry ${entry.index+1}`}${item.bucketName?` · ${item.bucketName}`:''}`));
+    if(result?.reason)context.append(el('p','muted',result.reason));
     // Verified comparison evidence supplies attribution; owned names and perks stay intact.
     const variant=result?.variant;
-    if(variant?.verified===true&&!result?.reason&&['itemHash','baseHash','name','baseName'].every(field=>typeof variant[field]==='string'&&variant[field].trim()))detail.append(el('p','muted',`Recommendations from ${variant.baseName}`));
+    if(variant?.verified===true&&!result?.reason&&['itemHash','baseHash','name','baseName'].every(field=>typeof variant[field]==='string'&&variant[field].trim()))context.append(el('p','muted',`Recommendations from ${variant.baseName}`));
     // Rank is reference context only; it never affects row sorting or highlighting.
     if(record&&meta){
       const reference=el('button','text-link',`Sheet reference · ${meta.title}${record.tier?` · Tier ${plain(record.tier)}`:''}${meta.kind==='weapon'&&record.rank!=null?` · Rank ${record.rank} in ${meta.title}`:''}`);
-      reference.onclick=()=>{if(current())openItem({type:meta.refType||'weapon',id:record.id});};detail.append(reference);
+      reference.onclick=()=>{if(current())openItem({type:meta.refType||'weapon',id:record.id});};context.append(reference);
     }
     const exotic=entry.rarity==='exotic'||result?.tabId==='exotic-weapons';
     // Explain missing scoring eligibility without assigning a roll label or guessing rarity.
     if(Number(item.itemType)===3&&!entry.verdict.scored&&!result?.reason){
       const explanation=exotic?'Exotic items and references are shown without roll grading.':entry.rarity==='unverified'?'Saved weapon rarity could not be verified. This copy is not scored.':entry.rarity!=='legendary'?'This weapon is not legendary and is not scored.':!record?'No trusted sheet reference is available.':!entry.verdict.requiredCount?'The sheet provides no recommendation columns for this copy.':'No verified recommendation score is available.';
-      detail.append(el('p','muted',explanation));
+      context.append(el('p','muted',explanation));
     }
     // Exotics keep descriptive references and copy-owned choices without a roll grid.
     if(exotic){
@@ -155,7 +178,9 @@ export async function loadout(manifest,params,{signal}={}) {
         const available=availableText(field,imported,verdict);content.append(availablePerks(field,imported,verdict,entry.verdict));
         const matched=entry.verdict.scored&&entry.verdict.satisfied.includes(field);
         if(legendary){
-          content.append(el('p','muted',`Recommended: ${display(verdict?.recommended??record?.[field])||'No recommendation'}`));
+          const values=verdict?.recommended??record?.[field];
+          const line=recommendedPerks(field,values,perkIcons);content.append(line);
+          recommendationDisplays.add({line,field,values,current});
           // Any verified owned option satisfies the column, independent of its selected state.
           if(matched)content.append(el('span','badge inventory-perk-match',words('match')));
           else if(entry.verdict.scored&&['different','no-recommendation'].includes(verdict?.status))content.append(el('span',`badge${verdict.status==='different'?' inventory-perk-different':''}`,words(verdict.status)));
@@ -170,19 +195,27 @@ export async function loadout(manifest,params,{signal}={}) {
       detail.append(fields);
     }else detail.append(el('p','muted','Not graded. This entry is saved inventory context.'));
     if(record?.notes)detail.append(el('p','loadout-notes',plain(record.notes)));
+    detail.append(context);
     return detail;
   }
   function inventoryRow(entry,current) {
     const {item,verdict}=entry;const row=el('article',`inventory-row${verdict.scored&&verdict.complete?' inventory-complete':''}${!verdict.scored?' inventory-unscored':''}`);
     row.setAttribute('data-entry-index',String(entry.index));
     const details=el('details','inventory-details');const summary=el('summary','inventory-row-summary');const info=el('div','inventory-row-info');
-    info.append(el('h3','',item.name||'Unresolved item'),el('p','muted',`${entry.typeLabel}${item.itemTypeDisplayName||item.itemSubTypeName?` · ${item.itemTypeDisplayName||item.itemSubTypeName}`:''} · ${entry.locationLabel}${item.equipped&&!/equipped/i.test(entry.locationLabel)?' · Equipped':''}${item.quantity!=null?` · Quantity ${item.quantity}`:''}`));
+    const title=el('h3','',item.name||'Unresolved item');
+    const power=Number.isInteger(item.power)&&item.power>=0?item.power:null;
+    if(power!==null){
+      const badge=el('span','inventory-power');badge.setAttribute('aria-label',`Power ${power}`);
+      const star=el('span','','✦');star.setAttribute('aria-hidden','true');badge.append(star,el('span','',String(power)));title.append(badge);
+    }
+    // The disclosure label also includes Power, since it overrides nested accessibility names.
+    info.append(title,el('p','muted',`${entry.typeLabel}${item.itemTypeDisplayName||item.itemSubTypeName?` · ${item.itemTypeDisplayName||item.itemSubTypeName}`:''} · ${entry.locationLabel}${item.equipped&&!/equipped/i.test(entry.locationLabel)?' · Equipped':''}${item.quantity!=null?` · Quantity ${item.quantity}`:''}`));
     // Only trusted legendary scores expose matched-column summaries.
     if(verdict.scored&&entry.rarity==='legendary'&&entry.comparison?.tabId!=='exotic-weapons'){
       const satisfied=Array.isArray(verdict.satisfied)?verdict.satisfied:[];
       if(satisfied.length)info.append(el('p','inventory-match-fields',`Matched recommendations: ${satisfied.map(field=>fieldLabels[field]||field).join(' · ')}`));
     }
-    summary.setAttribute('aria-label',`${item.name||'Unresolved item'} · ${entry.locationLabel}${verdict.scored?` · ${verdict.label}`:''}`);
+    summary.setAttribute('aria-label',`${item.name||'Unresolved item'}${power!==null?` · Power ${power}`:''} · ${entry.locationLabel}${verdict.scored?` · ${verdict.label}`:''}`);
     summary.append(bungieIcon(item.icon,item.name),info);
     if(verdict.scored)summary.append(el('span','inventory-match-label',verdict.label));details.append(summary);row.append(details);
     // Detached rows cannot build details for a replaced snapshot, action or page.
@@ -193,7 +226,7 @@ export async function loadout(manifest,params,{signal}={}) {
     return row;
   }
   function renderGear() {
-    savedMeta.replaceChildren();gear.replaceChildren();confirmation.hidden=true;inventoryControls=[];
+    savedMeta.replaceChildren();gear.replaceChildren();recommendationDisplays.clear();confirmation.hidden=true;inventoryControls=[];
     const ownerSnapshot=snapshot,ownerRevision=revision,ownerGeneration=++inventoryGeneration;
     const current=()=>!stopped()&&snapshot===ownerSnapshot&&revision===ownerRevision&&inventoryGeneration===ownerGeneration;
     // A replacement resets filters/page/details and builds each indexed comparison once.
@@ -396,6 +429,12 @@ export async function loadout(manifest,params,{signal}={}) {
     report('Saved inventory cleared for this account.');clear.focus();
   });
 
+  // Optional art never delays the saved inventory; only current visible lines update on arrival.
+  load('perk-icons').then(index=>{
+    if(stopped()||index?.schemaVersion!==1||!index.icons||typeof index.icons!=='object')return;
+    perkIcons=index.icons;
+    for(const display of recommendationDisplays)if(display.current())recommendedPerks(display.field,display.values,perkIcons,display.line);
+  }).catch(()=>{/* Names and grades remain usable without icons. */});
   // Loading modules and local JSON is safe on entry; never resolve memberships here.
   const dependencies=await Promise.allSettled([import('../account/auth.js'),import('../account/storage.js'),import('../account/inventory.js'),import('../account/compare.js'),import('../account/config.js'),load('bungie-map')]);
   if(stopped())return page;

@@ -97,3 +97,13 @@
 .inventory-perk-different{color:var(--perk-different)}
 .inventory-perk-state{font-size:10px;font-weight:600;white-space:nowrap}
 .inventory-perk{display:inline-block;margin:2px 0}
+
+/* Weapon identity and recommendation art remain compact beside readable labels. */
+.inventory-power{display:inline-flex;gap:4px;align-items:center;margin-left:10px;color:var(--accent);font-size:12px;font-weight:650;white-space:nowrap;font-variant-numeric:tabular-nums}
+.inventory-recommendations{color:var(--muted);line-height:1.9}
+.inventory-recommendation{display:inline-flex;align-items:center;gap:5px;max-width:100%;vertical-align:middle}
+.inventory-recommendation-icon{width:20px;height:20px;flex:0 0 20px;object-fit:contain;border-radius:2px}
+.inventory-recommendation>span{overflow-wrap:anywhere}
+.inventory-weapon-context{border-top:1px solid var(--line);padding-top:14px;margin-top:14px;font-size:12px;color:var(--muted)}
+.inventory-weapon-context>p{line-height:1.7;margin:0 0 10px}
+.inventory-weapon-context>.text-link{display:inline-flex;align-items:center}
