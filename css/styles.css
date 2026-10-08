@@ -107,3 +107,5 @@
 .inventory-weapon-context{border-top:1px solid var(--line);padding-top:14px;margin-top:14px;font-size:12px;color:var(--muted)}
 .inventory-weapon-context>p{line-height:1.7;margin:0 0 10px}
 .inventory-weapon-context>.text-link{display:inline-flex;align-items:center}
+
+.inventory-tier{display:inline-flex;align-items:center;margin-left:10px;padding:2px 7px;border:1px solid var(--line);border-radius:4px;color:var(--accent);font-size:12px;font-weight:650;white-space:nowrap}

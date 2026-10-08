@@ -208,14 +208,18 @@ export async function loadout(manifest,params,{signal}={}) {
       const badge=el('span','inventory-power');badge.setAttribute('aria-label',`Power ${power}`);
       const star=el('span','','✦');star.setAttribute('aria-hidden','true');badge.append(star,el('span','',String(power)));title.append(badge);
     }
-    // The disclosure label also includes Power, since it overrides nested accessibility names.
+    // Sheet tier is independent of this copy's perk score and is shown beside Power.
+    const sheetTier=plain(entry.comparison?.record?.tier);
+    const tier=/^[SABCDEF]$/.test(sheetTier)?sheetTier:null;
+    if(tier){const badge=el('span','inventory-tier',`Tier ${tier}`);badge.setAttribute('aria-label',`Spreadsheet tier ${tier}`);title.append(badge);}
+    // The disclosure label includes both badges, overriding nested accessibility names.
     info.append(title,el('p','muted',`${entry.typeLabel}${item.itemTypeDisplayName||item.itemSubTypeName?` · ${item.itemTypeDisplayName||item.itemSubTypeName}`:''} · ${entry.locationLabel}${item.equipped&&!/equipped/i.test(entry.locationLabel)?' · Equipped':''}${item.quantity!=null?` · Quantity ${item.quantity}`:''}`));
     // Only trusted legendary scores expose matched-column summaries.
     if(verdict.scored&&entry.rarity==='legendary'&&entry.comparison?.tabId!=='exotic-weapons'){
       const satisfied=Array.isArray(verdict.satisfied)?verdict.satisfied:[];
       if(satisfied.length)info.append(el('p','inventory-match-fields',`Matched recommendations: ${satisfied.map(field=>fieldLabels[field]||field).join(' · ')}`));
     }
-    summary.setAttribute('aria-label',`${item.name||'Unresolved item'}${power!==null?` · Power ${power}`:''} · ${entry.locationLabel}${verdict.scored?` · ${verdict.label}`:''}`);
+    summary.setAttribute('aria-label',`${item.name||'Unresolved item'}${power!==null?` · Power ${power}`:''}${tier?` · Spreadsheet tier ${tier}`:''} · ${entry.locationLabel}${verdict.scored?` · ${verdict.label}`:''}`);
     summary.append(bungieIcon(item.icon,item.name),info);
     if(verdict.scored)summary.append(el('span','inventory-match-label',verdict.label));details.append(summary);row.append(details);
     // Detached rows cannot build details for a replaced snapshot, action or page.
