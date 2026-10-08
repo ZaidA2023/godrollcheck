@@ -2,7 +2,7 @@
 import {createClient, PROFILE_COMPONENTS, mapLimit} from './bungie.js';
 import {getSession, operationSignal, validateConfig} from './auth.js';
 import {loadDefinitions, validateSnapshot} from './storage.js';
-const ITEM = 'DestinyInventoryItemDefinition', BUCKET = 'DestinyInventoryBucketDefinition', SOCKET = 'DestinySocketTypeDefinition', STAT = 'DestinyStatDefinition';
+const ITEM = 'DestinyInventoryItemDefinition', BUCKET = 'DestinyInventoryBucketDefinition', SOCKET = 'DestinySocketTypeDefinition', STAT = 'DestinyStatDefinition', SET = 'DestinyPlugSetDefinition';
 const FIELDS = ['perk1','perk2','barrel','mag','masterwork','originTrait'];
 let importing = false;
 function required(value, message) { if (!value) throw new Error(`Incomplete inventory: ${message}. Previous saved inventory is unchanged.`); return value; }
@@ -51,6 +51,37 @@ function plugValue(hash, def, state, lookup, role) {
   }
   return {plugHash:String(hash),name:name || 'Unknown plug',resolved,enhanced:/^Enhanced /.test(def?.itemTypeDisplayName || ''),...state};
 }
+// Only unconditional fixed roll sockets can use definition choices as owned options.
+function fixedSocketRole(raw, entry, live, lookup) {
+  const type = lookup(SOCKET,entry.socketTypeHash);
+  if (!raw.itemInstanceId || !Number.isInteger(raw.state) || raw.state < 0 || (raw.state & 8) ||
+      entry.randomizedPlugSetHash || type?.alwaysRandomizeSockets === true ||
+      !Number.isInteger(entry.plugSources) || !(entry.plugSources & 2) ||
+      live?.isEnabled !== true || live.isVisible !== true || !live.plugHash) return null;
+  const inserted = category(lookup(ITEM,live.plugHash),type);
+  const initial = category(lookup(ITEM,entry.singleInitialItemHash),type);
+  return inserted && inserted !== 'masterwork' && (!initial || initial === inserted) ? inserted : null;
+}
+function fixedList(entry, lookup) {
+  // Reusable sets contain fixed choices; randomized sets are never consulted here.
+  const set = entry.reusablePlugSetHash ? lookup(SET,entry.reusablePlugSetHash) : null;
+  return entry.reusablePlugSetHash ? set?.reusablePlugItems : entry.reusablePlugItems;
+}
+function fixedChoices(raw, entry, live, lookup) {
+  const role = fixedSocketRole(raw,entry,live,lookup), list = fixedList(entry,lookup);
+  if (!role || !Array.isArray(list) || !list.some(p => String(p.plugItemHash) === String(live.plugHash))) return [];
+  const seen = new Set();
+  // Rules or material costs mean availability needs runtime evidence, not a static guess.
+  return list.filter(p => {
+    const hash = p?.plugItemHash, def = lookup(ITEM,hash), plug = def?.plug;
+    if (!Number.isInteger(hash) || hash <= 0 || hash > 4294967295 || seen.has(hash) ||
+        p.currentlyCanRoll === false || p.craftingRequirements || category(def,lookup(SOCKET,entry.socketTypeHash)) !== role ||
+        !Array.isArray(plug?.insertionRules) || plug.insertionRules.length ||
+        !Array.isArray(plug.enabledRules) || plug.enabledRules.length || plug.isDummyPlug ||
+        plug.insertionMaterialRequirementHash || plug.enabledMaterialRequirementHash) return false;
+    seen.add(hash);return true;
+  }).map(p => ({plugItemHash:p.plugItemHash,canInsert:true,enabled:true,enableFailIndexes:[],insertFailIndexes:[],evidenceSource:'fixed-definition'}));
+}
 // Socket indexes join the live instance to the same ordered weapon-definition entry.
 export function analyzeSockets(rawItem, weapon, sockets, reusable, lookup) {
   const fields = Object.fromEntries(FIELDS.map(f => [f,{selected:null,alternates:[],status:'unknown',alternateStatus:'unknown'}]));
@@ -84,14 +115,16 @@ export function analyzeSockets(rawItem, weapon, sockets, reusable, lookup) {
     // A resolved inserted plug must have the same role that established this socket.
     const selectedRole = category(inserted,type);
     const status = selected?.resolved && selectedRole === role ? (selected.isEnabled === true ? 'resolved' : selected.isEnabled === false ? 'inactive' : 'unknown') : 'unknown';
-    const values = reusable?.plugs?.[index];
+    const runtime = reusable?.plugs?.[index];
+    const runtimeAlternatesPresent = Array.isArray(runtime);
+    const values = runtimeAlternatesPresent ? runtime : fixedChoices(rawItem,entry,sockets?.[index],lookup);
     // Runtime choices belong to this instance; source flags and enhancement are not ownership gates.
     const rolled = !!rawItem.itemInstanceId && Number.isInteger(rawItem.state) && rawItem.state >= 0 && !(rawItem.state & 8);
     const alternates = Array.isArray(values) ? values.filter(p => String(p.plugItemHash) !== selected?.plugHash).map(p => {
       const def = lookup(ITEM,p.plugItemHash), supported = category(def,type) === role;
-      return plugValue(p.plugItemHash,def,{canInsert:p.canInsert,enabled:p.enabled,enableFailIndexes:p.enableFailIndexes || [],insertFailIndexes:p.insertFailIndexes || [],ownership:rolled && supported ? 'rolled' : 'unknown',selectable:rolled && supported && p.canInsert === true && p.enabled === true && !(p.enableFailIndexes?.length) && !(p.insertFailIndexes?.length)},lookup,role);
+      return plugValue(p.plugItemHash,def,{canInsert:p.canInsert,enabled:p.enabled,enableFailIndexes:p.enableFailIndexes || [],insertFailIndexes:p.insertFailIndexes || [],...(p.evidenceSource === 'fixed-definition' ? {evidenceSource:p.evidenceSource} : {}),ownership:rolled && supported ? 'rolled' : 'unknown',selectable:rolled && supported && p.canInsert === true && p.enabled === true && !(p.enableFailIndexes?.length) && !(p.insertFailIndexes?.length)},lookup,role);
     }) : [];
-    fields[field] = {socketIndex:index,selected,alternates,status,alternateStatus:Array.isArray(values) && rolled ? 'resolved' : 'unknown'};
+    fields[field] = {socketIndex:index,selected,alternates,status,runtimeAlternatesPresent,alternateStatus:(runtimeAlternatesPresent || values.length > 0) && rolled ? 'resolved' : 'unknown'};
   }
   return {fields,sockets:socketDetails};
 }
@@ -120,6 +153,11 @@ export function reconcileSavedInventory(snapshot) {
       (Array.isArray(stats) && stats.every(stat => stat && lookup(STAT,stat.statTypeHash))));
   };
   const items = snapshot.items.map(item => {
+    // Revalidate derived static claims every time; incomplete evidence cannot preserve them.
+    if (Object.values(item?.fields || {}).some(field => field?.alternates?.some(plug => plug.evidenceSource === 'fixed-definition'))) {
+      item = {...item,fields:Object.fromEntries(Object.entries(item.fields).map(([name,field]) =>
+        [name,{...field,alternates:(field.alternates || []).filter(plug => plug.evidenceSource !== 'fixed-definition')}]))};
+    }
     try {
       if (item?.itemType !== 3 || !item.instanceId || !Number.isInteger(item.state) || item.state < 0) return item;
       const weapon = lookup(ITEM,item.itemHash), entries = weapon?.sockets?.socketEntries;
@@ -152,7 +190,11 @@ export function reconcileSavedInventory(snapshot) {
         if (field.alternates.some(plug => !['unknown','rolled'].includes(plug?.ownership) ||
           typeof plug.canInsert !== 'boolean' || typeof plug.enabled !== 'boolean' ||
           !Array.isArray(plug.enableFailIndexes) || !Array.isArray(plug.insertFailIndexes) || !completePlug(plug.plugHash))) return item;
-        if (field.alternates.length || field.alternateStatus === 'resolved') plugs[index] = field.alternates.map(plug => ({plugItemHash:plug.plugHash,canInsert:plug.canInsert,enabled:plug.enabled,
+        const retainedRuntime = field.alternates.filter(plug => plug.evidenceSource !== 'fixed-definition');
+        // Presence is independent of contents: explicit empty runtime arrays block fallback.
+        // Legacy unknown presence cannot distinguish an absent list from a rejected empty list.
+        const runtimePresent = typeof field.runtimeAlternatesPresent === 'boolean' ? field.runtimeAlternatesPresent : true;
+        if (runtimePresent) plugs[index] = retainedRuntime.map(plug => ({plugItemHash:plug.plugHash,canInsert:plug.canInsert,enabled:plug.enabled,
           enableFailIndexes:plug.enableFailIndexes,insertFailIndexes:plug.insertFailIndexes}));
       }
       const analysis = analyzeSockets({...item,itemInstanceId:item.instanceId},weapon,sockets,{plugs},lookup);
@@ -245,12 +287,28 @@ export async function importInventory(config, membership, {signal,onProgress} = 
     const weapons = rawItems.filter(i => i.itemInstanceId && definitions.get(`${ITEM}/${i.itemHash}`).definition.itemType === 3);
     const socketEntries = weapons.flatMap(i => definitions.get(`${ITEM}/${i.itemHash}`).definition.sockets?.socketEntries || []);
     await mapLimit([...new Set(socketEntries.map(e => e.socketTypeHash))],hash => resolve(SOCKET,hash));
-    // Resolve inserted and instance candidates, never download randomized/shared pools.
+    // Resolve inserted and instance candidates before unconditional fixed-set fallback.
     const plugHashes = new Set(socketEntries.map(e => e.singleInitialItemHash).filter(Boolean));
     for (const item of weapons) {
       for (const socket of profile.itemComponents?.sockets?.data?.[item.itemInstanceId]?.sockets || []) if (socket.plugHash) plugHashes.add(socket.plugHash);
       for (const plugs of Object.values(profile.itemComponents?.reusablePlugs?.data?.[item.itemInstanceId]?.plugs || {})) for (const plug of plugs) if (plug.plugItemHash) plugHashes.add(plug.plugItemHash);
     }
+    await mapLimit([...plugHashes],hash => resolve(ITEM,hash));
+    // Component 310 omits state-independent fixed choices; resolve only eligible roll sockets.
+    const fixedEntries = [];
+    for (const item of weapons) {
+      const entries = definitions.get(`${ITEM}/${item.itemHash}`).definition.sockets?.socketEntries || [];
+      const live = profile.itemComponents?.sockets?.data?.[item.itemInstanceId]?.sockets;
+      const runtime = profile.itemComponents?.reusablePlugs?.data?.[item.itemInstanceId]?.plugs;
+      const lookup = (type,hash) => definitions.get(`${type}/${hash}`)?.definition;
+      entries.forEach((entry,index) => {
+        if (!Array.isArray(runtime?.[index]) && fixedSocketRole(item,entry,live?.[index],lookup)) fixedEntries.push(entry);
+      });
+    }
+    const fixedSets = [...new Set(fixedEntries.map(entry => entry.reusablePlugSetHash).filter(Boolean))];
+    await mapLimit(fixedSets,hash => resolve(SET,hash));
+    const fixedLookup = (type,hash) => definitions.get(`${type}/${hash}`)?.definition;
+    for (const entry of fixedEntries) for (const plug of fixedList(entry,fixedLookup) || []) if (plug.plugItemHash) plugHashes.add(plug.plugItemHash);
     await mapLimit([...plugHashes],hash => resolve(ITEM,hash));
     // Masterwork verdicts require the names of actual investment stats, not tier levels.
     const statHashes = [...plugHashes].flatMap(hash => {
@@ -260,7 +318,7 @@ export async function importInventory(config, membership, {signal,onProgress} = 
     await mapLimit([...new Set(statHashes)],hash => resolve(STAT,hash));
     controller.signal.throwIfAborted();
     // Prune unrelated cached definitions so each snapshot remains independently renderable.
-    const used = new Set([...rawItems.map(i => `${ITEM}/${i.itemHash}`),...buckets.map(h => `${BUCKET}/${h}`),...socketEntries.map(e => `${SOCKET}/${e.socketTypeHash}`),...[...plugHashes].map(h => `${ITEM}/${h}`),...statHashes.map(h => `${STAT}/${h}`)]);
+    const used = new Set([...rawItems.map(i => `${ITEM}/${i.itemHash}`),...buckets.map(h => `${BUCKET}/${h}`),...socketEntries.map(e => `${SOCKET}/${e.socketTypeHash}`),...[...plugHashes].map(h => `${ITEM}/${h}`),...statHashes.map(h => `${STAT}/${h}`),...fixedSets.map(h => `${SET}/${h}`)]);
     const selectedDefinitions = new Map([...definitions].filter(([key]) => used.has(key)));
     const snapshot = normalizeProfile(profile,{...membership,bungieMembershipId:session.bungieMembershipId},version,selectedDefinitions);
     onProgress?.({phase:'complete',message:'Inventory complete. Ready to save.'});

@@ -41,7 +41,7 @@ export function createClient(config, {signal, token, fetchImpl = globalThis.fetc
     cooldownUntil = Math.max(cooldownUntil,Date.now()+seconds*1000);
   }
   async function perform(path, {method = 'GET', body, form = false} = {}) {
-    const allowed = /^\/Platform\/(Destiny2\/(Manifest\/|[1-6]\/Profile\/\d+\/|Manifest\/Destiny(?:InventoryItem|InventoryBucket|SocketType|Stat)Definition\/\d+\/)|User\/GetMembershipsForCurrentUser\/)$/.test(path.split('?')[0]);
+    const allowed = /^\/Platform\/(Destiny2\/(Manifest\/|[1-6]\/Profile\/\d+\/|Manifest\/Destiny(?:InventoryItem|InventoryBucket|SocketType|Stat|PlugSet)Definition\/\d+\/)|User\/GetMembershipsForCurrentUser\/)$/.test(path.split('?')[0]);
     if (!(allowed && method === 'GET') && !(path === '/Platform/App/OAuth/token/' && method === 'POST' && form)) throw new Error('Unsupported Bungie endpoint.');
     // At most two attempts are permitted; authorization exchange is never retried.
     for (let retry = 0; retry < 2; retry++) {
