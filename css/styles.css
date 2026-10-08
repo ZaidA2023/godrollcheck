@@ -118,3 +118,8 @@
 .inventory-best-score{font-size:12px;color:var(--accent);margin:0 0 10px}
 .inventory-best-copy>.inventory-detail-content{padding:0}
 @media(max-width:700px){.inventory-best-copy{padding:10px}}
+
+/* Tied copies expose roll details only on demand; the current copy stays a label. */
+.inventory-best-stats>summary{cursor:pointer;min-height:44px;display:list-item;padding:12px 0}
+.inventory-best-stats>.inventory-detail-content{padding:0}
+.inventory-best-copy>.inventory-best-score{margin:0}

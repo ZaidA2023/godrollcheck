@@ -201,10 +201,17 @@ export async function loadout(manifest,params,{signal}={}) {
       section.append(el('h4','',winners.length>1?`Best owned rolls · ${winners.length} tied`:'Best owned roll'));
       for(const winner of winners){
         const card=el('article','inventory-best-copy');
+        if(winner===entry){card.append(el('p','inventory-best-score','This copy'));section.append(card);continue;}
         const power=Number.isInteger(winner.item.power)&&winner.item.power>=0?` · ✦ ${winner.item.power}`:'';
-        card.append(el('h5','',`${winner.item.name}${power}${winner===entry?' · This copy':''}`),el('p','inventory-best-score',winner.verdict.label));
-        // An explicit false flag prevents comparison cards from recursively expanding.
-        card.append(itemDetails(winner,current,false));section.append(card);
+        card.append(el('h5','',`${winner.item.name}${power}`),el('p','muted',`${winner.locationLabel}${winner.item.instanceId?` · Instance ${winner.item.instanceId}`:''}`));
+        const stats=el('details','inventory-best-stats');
+        stats.append(el('summary','inventory-best-score',`${winner.verdict.matchCount} of ${winner.verdict.requiredCount} recommendations matched · Show stats`));
+        // Lazy, guarded details cannot populate after this account, snapshot or page changes.
+        let populated=false;stats.addEventListener('toggle',()=>{
+          if(!stats.open||populated||!current())return;
+          populated=true;stats.append(itemDetails(winner,current,false));
+        });
+        card.append(stats);section.append(card);
       }
       detail.append(section);
     }
