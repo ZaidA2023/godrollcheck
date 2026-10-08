@@ -25,10 +25,13 @@ export function weapons(tab, meta, manifest, params) {
   const records=tab.records.filter(r=>['element','frame','source','season','tier'].every(f=>!params.get(f)||plain(r[f])===params.get(f))&&(!query||Object.values(r).map(plain).join(' ').toLocaleLowerCase().includes(query)));
   const summary=el('div','results-summary');summary.append(el('span','',`${records.length} / ${tab.records.length} weapons`),el('span','muted','SELECT AN ITEM FOR ROLLS & ANALYSIS'));page.append(summary);
   if(params.get('view')==='table') {
-    const defaults=['rank','icon','name','element','frame','source','perk1','perk2','originTrait','tier','notes'];
+    // Evaluation and recommended rolls lead; descriptive metadata stays to the right.
+    const defaults=['tier','rank','icon','name','barrel','mag','masterwork','perk1','perk2','originTrait','notes','element','frame','source'];
     const selector=el('details','column-selector');selector.append(el('summary','','Columns'));
-    const choices=el('div','column-choices');const chosen=new Set(defaults);const columns=visibleColumns(tab.columns,tab.records,meta);
-    const host=el('div');const render=()=>host.replaceChildren(table(records,defaults.map(f=>columns.find(c=>c.field===f)).filter(c=>c&&chosen.has(c.field)).concat(columns.filter(c=>chosen.has(c.field)&&!defaults.includes(c.field))),{...meta,stunLabels:manifest.stunLabels},'rank'));
+    const choices=el('div','column-choices');const chosen=new Set(defaults);
+    const visible=visibleColumns(tab.columns,tab.records,meta);
+    const columns=defaults.map(field=>visible.find(column=>column.field===field)).filter(Boolean).concat(visible.filter(column=>!defaults.includes(column.field)));
+    const host=el('div');const render=()=>host.replaceChildren(table(records,columns.filter(column=>chosen.has(column.field)),{...meta,stunLabels:manifest.stunLabels},'rank'));
     columns.forEach(c=>{const l=el('label');const checkbox=el('input');checkbox.type='checkbox';checkbox.checked=chosen.has(c.field);checkbox.onchange=()=>{checkbox.checked?chosen.add(c.field):chosen.delete(c.field);render();};l.append(checkbox,document.createTextNode(c.label));choices.append(l);});selector.append(choices);page.append(selector,host);render();
   } else {
     const tiers=['S','A','B','C','D','E','F',...new Set(records.map(r=>r.tier||'N/A').filter(t=>!['S','A','B','C','D','E','F'].includes(t)))];
