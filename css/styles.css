@@ -109,3 +109,12 @@
 .inventory-weapon-context>.text-link{display:inline-flex;align-items:center}
 
 .inventory-tier{display:inline-flex;align-items:center;margin-left:10px;padding:2px 7px;border:1px solid var(--line);border-radius:4px;color:var(--accent);font-size:12px;font-weight:650;white-space:nowrap}
+
+/* Best copies keep their roll evidence together, with all tied instances visible. */
+.inventory-best-owned{border-top:1px solid var(--line);margin-top:20px;padding-top:18px}
+.inventory-best-owned>h4{font-size:16px;margin:0 0 14px;color:var(--accent)}
+.inventory-best-copy{border:1px solid var(--line);border-radius:6px;margin:12px 0;padding:15px;min-width:0;overflow-wrap:anywhere}
+.inventory-best-copy>h5{font-size:14px;margin:0 0 8px}
+.inventory-best-score{font-size:12px;color:var(--accent);margin:0 0 10px}
+.inventory-best-copy>.inventory-detail-content{padding:0}
+@media(max-width:700px){.inventory-best-copy{padding:10px}}

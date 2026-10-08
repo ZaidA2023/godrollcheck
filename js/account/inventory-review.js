@@ -107,3 +107,14 @@ export function newWeaponEntries(entries, previousRefresh) {
   const previous = new Set(previousRefresh.weaponInstanceIds);
   return entries.filter(entry => Number(entry.item.itemType) === 3 && typeof entry.item.instanceId === 'string' && entry.item.instanceId && !previous.has(entry.item.instanceId));
 }
+
+// Compare copies across the full saved account, independent of the visible inventory filters.
+export function bestOwnedEntries(entries, item) {
+  const identity = value => normalize(value).replace(/[‘’]/g,"'").replace(/[“”]/g,'"').replace(/\s+/g,' ');
+  const name = identity(item?.name);
+  if (!name) return [];
+  const candidates = entries.filter(entry => entry.type === 'weapons' && entry.rarity === 'legendary' && entry.verdict.scored && identity(entry.item.name) === name);
+  const maximum = candidates.reduce((count,entry) => Math.max(count,entry.verdict.matchCount),-1);
+  // Retain all tied instances, including zero matches; no power or location tiebreaker.
+  return candidates.filter(entry => entry.verdict.matchCount === maximum);
+}

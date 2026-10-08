@@ -1,5 +1,5 @@
 import {el, load, plain, openItem} from '../data.js';
-import {buildEntries, selectEntries, locationScopes, newWeaponEntries} from '../account/inventory-review.js';
+import {buildEntries, selectEntries, locationScopes, newWeaponEntries, bestOwnedEntries} from '../account/inventory-review.js';
 
 const fieldLabels={barrel:'Barrel / string / blade',mag:'Magazine / battery / guard',masterwork:'Masterwork',perk1:'Perk column 1',perk2:'Perk column 2',originTrait:'Origin trait'};
 const isPostmaster=item=>item.isPostmaster||String(item.bucketHash)==='215593132'||/postmaster/i.test(String(item.location));
@@ -142,7 +142,7 @@ export async function loadout(manifest,params,{signal}={}) {
     if(!compare||!map?.integrityVerified)return {status:'unknown',reason:'Comparison unavailable until the local mapping and comparison module are ready.',fields:{}};
     try{return compare.compareItem({...item,manifestVersion:snapshot?.manifestVersion},map,tables);}catch{return {status:'unknown',reason:'This item could not be compared with the reviewed map.',fields:{}};}
   }
-  function itemDetails(entry,current) {
+  function itemDetails(entry,current,includeBest=true) {
     const {item,comparison:result}=entry;const detail=el('div','inventory-detail-content');
     const record=result?.record;const meta=manifest.tabs[result?.tabId];
     const context=el('div','inventory-weapon-context');
@@ -194,7 +194,21 @@ export async function loadout(manifest,params,{signal}={}) {
       }
       detail.append(fields);
     }else detail.append(el('p','muted','Not graded. This entry is saved inventory context.'));
-    if(record?.notes)detail.append(el('p','loadout-notes',plain(record.notes)));
+    // Use the full cached account, never the current character, filter or page.
+    if(includeBest&&entry.verdict.scored){
+      const winners=bestOwnedEntries(entries,item);
+      const section=el('section','inventory-best-owned');
+      section.append(el('h4','',winners.length>1?`Best owned rolls · ${winners.length} tied`:'Best owned roll'));
+      for(const winner of winners){
+        const card=el('article','inventory-best-copy');
+        const power=Number.isInteger(winner.item.power)&&winner.item.power>=0?` · ✦ ${winner.item.power}`:'';
+        card.append(el('h5','',`${winner.item.name}${power}${winner===entry?' · This copy':''}`),el('p','inventory-best-score',winner.verdict.label));
+        // An explicit false flag prevents comparison cards from recursively expanding.
+        card.append(itemDetails(winner,current,false));section.append(card);
+      }
+      detail.append(section);
+    }
+    if(includeBest&&record?.notes)detail.append(el('p','loadout-notes',plain(record.notes)));
     detail.append(context);
     return detail;
   }
