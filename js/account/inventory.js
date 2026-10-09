@@ -1,7 +1,8 @@
 // Import is explicit and read-only; persistence belongs to the caller after validation.
-import {createClient, PROFILE_COMPONENTS, mapLimit} from './bungie.js';
+import {createClient, PROFILE_COMPONENTS} from './bungie.js';
 import {getSession, operationSignal, validateConfig, ensureAccess, tagSnapshotEpoch} from './auth.js';
 import {loadDefinitions, validateSnapshot} from './storage.js';
+import {createDefinitionLoader} from './manifest-cache.js';
 const ITEM = 'DestinyInventoryItemDefinition', BUCKET = 'DestinyInventoryBucketDefinition', SOCKET = 'DestinySocketTypeDefinition', STAT = 'DestinyStatDefinition', SET = 'DestinyPlugSetDefinition';
 const FIELDS = ['perk1','perk2','barrel','mag','masterwork','originTrait'];
 let importing = false;
@@ -32,6 +33,7 @@ function category(plug, socketType) {
   const p = plug?.plug;
   if (!p || !socketType?.plugWhitelist?.some(entry => String(entry.categoryHash) === String(p.plugCategoryHash) || entry.categoryIdentifier === p.plugCategoryIdentifier)) return null;
   const c = p.plugCategoryIdentifier, type = plug.itemTypeDisplayName;
+  if (c === 'tubes' && type === 'Launcher Barrel') return 'barrel';
   if (['barrels','bowstrings','blades','scopes','frames'].includes(c) && /^(Enhanced )?(Barrel|Bowstring|Blade|Scope|Sight)$/.test(type) && (c !== 'frames' || type === 'Blade')) return 'barrel';
   if (['magazines','magazines_gl','arrows','batteries','guards'].includes(c) && /^(Enhanced )?(Magazine|Arrow|Battery|Guard)$/.test(type)) return 'mag';
   if (c === 'frames' && ['Trait','Enhanced Trait'].includes(type)) return 'trait';
@@ -256,45 +258,37 @@ export async function importInventory(config, membership, {signal,onProgress} = 
     if(!session.memberships?.some(m=>m.membershipId===membership.membershipId&&m.membershipType===membership.membershipType))throw new Error('Choose a membership belonging to the connected account.');
     const client=createClient(config,{signal:controller.signal,token:session.accessToken});
     onProgress?.({phase:'manifest',message:'Reading Bungie manifest version.'});
-    const manifest = await client.request('/Platform/Destiny2/Manifest/');
+    // Both reads share the existing four-slot client and its common pacing gate.
+    const [manifest,profile] = await Promise.all([
+      client.request('/Platform/Destiny2/Manifest/'),
+      client.request(`/Platform/Destiny2/${membership.membershipType}/Profile/${membership.membershipId}/?components=${PROFILE_COMPONENTS.join(',')}`)
+    ]);
+    controller.signal.throwIfAborted();
     required(typeof manifest.version === 'string' && manifest.version,'manifest version missing');
     const version = manifest.version;
-    // One exact profile request defines the complete inventory boundary.
-    const profile = await client.request(`/Platform/Destiny2/${membership.membershipType}/Profile/${membership.membershipId}/?components=${PROFILE_COMPONENTS.join(',')}`);
     const {containers,currencies} = collectContainers(profile);
     required(Number.isFinite(Date.parse(profile.responseMintedTimestamp)),'Bungie response timestamp missing');
-    const definitions = new Map((await loadDefinitions(version)).map(d => [`${d.type}/${d.hash}`,d]));
-    const pending = new Map();
-    async function resolve(type,hash) {
-      if (!hash) return;
-      const key = `${type}/${hash}`; if (definitions.has(key)) return definitions.get(key).definition;
-      if (!pending.has(key)) pending.set(key,(async () => {
-        const definition = await client.request(`/Platform/Destiny2/Manifest/${type}/${hash}/`);
-        // An unresolved or redacted required definition prevents a complete import.
-        required(String(definition.hash) === String(hash) && !definition.redacted,`required definition ${hash} unavailable`);
-        // Definitions are held in memory until the caller atomically saves the snapshot.
-        definitions.set(key,{key:`${version}/en/${type}/${hash}`,version,language:'en',type,hash:String(hash),definition});
-        onProgress?.({phase:'definitions',resolved:definitions.size,attempts:client.attempts,message:`Resolved ${definitions.size} definitions.`});
-        return definition;
-      })());
-      return pending.get(key);
-    }
+    // Definition storage is optional; a failed read must not stop a complete import.
+    let entries=[];
+    try { entries=await loadDefinitions(version); controller.signal.throwIfAborted(); }
+    catch { controller.signal.throwIfAborted(); }
+    const {definitions,resolveBatch} = createDefinitionLoader({manifest,client,signal:controller.signal,onProgress,entries});
     // Resolve by dependency layer to keep every batch bounded to four requests.
     const rawItems = containers.flatMap(c => c.items).concat(currencies);
-    await mapLimit([...new Set(rawItems.map(i => i.itemHash))],hash => resolve(ITEM,hash));
+    await resolveBatch(ITEM,rawItems.map(i => i.itemHash));
     const buckets = rawItems.map(i => i.bucketHash || definitions.get(`${ITEM}/${i.itemHash}`)?.definition.inventory?.bucketTypeHash).filter(Boolean);
-    await mapLimit([...new Set(buckets)],hash => resolve(BUCKET,hash));
+    await resolveBatch(BUCKET,buckets);
     // Socket analysis is weapon-only; other inventory items still get offline names/icons.
     const weapons = rawItems.filter(i => i.itemInstanceId && definitions.get(`${ITEM}/${i.itemHash}`).definition.itemType === 3);
     const socketEntries = weapons.flatMap(i => definitions.get(`${ITEM}/${i.itemHash}`).definition.sockets?.socketEntries || []);
-    await mapLimit([...new Set(socketEntries.map(e => e.socketTypeHash))],hash => resolve(SOCKET,hash));
+    await resolveBatch(SOCKET,socketEntries.map(e => e.socketTypeHash));
     // Resolve inserted and instance candidates before unconditional fixed-set fallback.
     const plugHashes = new Set(socketEntries.map(e => e.singleInitialItemHash).filter(Boolean));
     for (const item of weapons) {
       for (const socket of profile.itemComponents?.sockets?.data?.[item.itemInstanceId]?.sockets || []) if (socket.plugHash) plugHashes.add(socket.plugHash);
       for (const plugs of Object.values(profile.itemComponents?.reusablePlugs?.data?.[item.itemInstanceId]?.plugs || {})) for (const plug of plugs) if (plug.plugItemHash) plugHashes.add(plug.plugItemHash);
     }
-    await mapLimit([...plugHashes],hash => resolve(ITEM,hash));
+    await resolveBatch(ITEM,[...plugHashes]);
     // Component 310 omits state-independent fixed choices; resolve only eligible roll sockets.
     const fixedEntries = [];
     for (const item of weapons) {
@@ -307,16 +301,16 @@ export async function importInventory(config, membership, {signal,onProgress} = 
       });
     }
     const fixedSets = [...new Set(fixedEntries.map(entry => entry.reusablePlugSetHash).filter(Boolean))];
-    await mapLimit(fixedSets,hash => resolve(SET,hash));
+    await resolveBatch(SET,fixedSets);
     const fixedLookup = (type,hash) => definitions.get(`${type}/${hash}`)?.definition;
     for (const entry of fixedEntries) for (const plug of fixedList(entry,fixedLookup) || []) if (plug.plugItemHash) plugHashes.add(plug.plugItemHash);
-    await mapLimit([...plugHashes],hash => resolve(ITEM,hash));
+    await resolveBatch(ITEM,[...plugHashes]);
     // Masterwork verdicts require the names of actual investment stats, not tier levels.
     const statHashes = [...plugHashes].flatMap(hash => {
       const plug = definitions.get(`${ITEM}/${hash}`).definition;
       return /^v\d+\.plugs\.weapons\.masterworks\.stat\./.test(plug.plug?.plugCategoryIdentifier || '') ? (plug.investmentStats || []).map(s => s.statTypeHash) : [];
     });
-    await mapLimit([...new Set(statHashes)],hash => resolve(STAT,hash));
+    await resolveBatch(STAT,statHashes);
     controller.signal.throwIfAborted();
     // Prune unrelated cached definitions so each snapshot remains independently renderable.
     const used = new Set([...rawItems.map(i => `${ITEM}/${i.itemHash}`),...buckets.map(h => `${BUCKET}/${h}`),...socketEntries.map(e => `${SOCKET}/${e.socketTypeHash}`),...[...plugHashes].map(h => `${ITEM}/${h}`),...statHashes.map(h => `${STAT}/${h}`),...fixedSets.map(h => `${SET}/${h}`)]);

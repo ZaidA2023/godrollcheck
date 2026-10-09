@@ -152,3 +152,28 @@ export async function loadDefinitions(version, language = 'en') {
     request.onerror = () => reject(new Error('Could not read saved definitions.'));
   }); } finally { db.close(); }
 }
+
+// Public tables contain only versioned manifest definitions, never player evidence.
+export async function loadPublicTable(type, {signal} = {}) {
+  signal?.throwIfAborted();
+  const value = await read('local', `publicTable/${type}`);
+  signal?.throwIfAborted();
+  return value?.value;
+}
+export async function savePublicTable(value, {signal} = {}) {
+  signal?.throwIfAborted();
+  const db = await open();
+  try {
+    signal?.throwIfAborted();
+    await new Promise((resolve,reject) => {
+      const tx = db.transaction('local','readwrite');
+      const abort = () => tx.abort();
+      const release = () => signal?.removeEventListener('abort',abort);
+      signal?.addEventListener('abort',abort,{once:true});
+      tx.oncomplete = () => { release(); resolve(); };
+      tx.onabort = tx.onerror = () => { release(); reject(signal?.aborted ? signal.reason : new Error('Could not cache public definitions.')); };
+      tx.objectStore('local').put({key:`publicTable/${value.type}`,value});
+    });
+    signal?.throwIfAborted();
+  } finally { db.close(); }
+}

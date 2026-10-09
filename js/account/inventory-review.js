@@ -118,3 +118,24 @@ export function bestOwnedEntries(entries, item) {
   // Retain all tied instances, including zero matches; no power or location tiebreaker.
   return candidates.filter(entry => entry.verdict.matchCount === maximum);
 }
+
+// Presentation sorting preserves entry identities and never changes grades or copy scope.
+export function sortEntries(entries, sort = 'recommendations') {
+  const tiers = 'SABCDEF';
+  // Sheet cells can be strings or text objects; unsupported tiers sort last.
+  const tier = entry => {
+    const raw = entry.comparison?.record?.tier;
+    const value = typeof raw === 'object' && raw !== null ? raw.text : raw;
+    return typeof value === 'string' && value.length === 1 && tiers.includes(value) ? tiers.indexOf(value) : tiers.length;
+  };
+  // Recorded numeric power alone is valid; the sentinel puts unknown values last.
+  const power = entry => Number.isFinite(entry.item?.power) && entry.item.power >= 0 ? entry.item.power : -1;
+  // Preserve buildEntries recommendation/name/location/instance/index ties.
+  return entries.slice().sort((a,b) =>
+    (sort === 'tier' ? tier(a)-tier(b) : sort === 'power' ? power(b)-power(a) : 0) ||
+    (b.verdict?.matchCount ?? 0)-(a.verdict?.matchCount ?? 0) ||
+    String(a.item?.name ?? '').localeCompare(String(b.item?.name ?? ''),'en') ||
+    String(a.locationLabel ?? '').localeCompare(String(b.locationLabel ?? ''),'en') ||
+    String(a.item?.instanceId ?? '').localeCompare(String(b.item?.instanceId ?? ''),'en') ||
+    (a.index ?? 0)-(b.index ?? 0));
+}

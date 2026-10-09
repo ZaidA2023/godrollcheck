@@ -1,5 +1,8 @@
 import {el, load, plain, openItem} from '../data.js';
-import {buildEntries, selectEntries, locationScopes, newWeaponEntries, bestOwnedEntries} from '../account/inventory-review.js';
+import {buildEntries, selectEntries, locationScopes, sortEntries, bestOwnedEntries} from '../account/inventory-review.js';
+
+import {createInventorySession} from '../account/inventory-session.js';
+import {createAutoRefresh} from '../account/auto-refresh.js';
 
 const fieldLabels={barrel:'Barrel / string / blade',mag:'Magazine / battery / guard',masterwork:'Masterwork',perk1:'Perk column 1',perk2:'Perk column 2',originTrait:'Origin trait'};
 const isPostmaster=item=>item.isPostmaster||String(item.bucketHash)==='215593132'||/postmaster/i.test(String(item.location));
@@ -102,7 +105,9 @@ export async function loadout(manifest,params,{signal}={}) {
   const controls=el('section','loadout-controls');controls.setAttribute('aria-label','Account and saved inventory');
   const connection=el('p','muted');const actions=el('div','loadout-actions');
   const connect=el('button','','Connect Bungie');const choose=el('button','','Choose account');const refresh=el('button','loadout-primary','Refresh and Save');const disconnect=el('button','','Disconnect');
-  actions.append(connect,choose,refresh,disconnect);controls.append(connection,actions);page.append(controls);
+  const autoToggle=el('button','','Auto refresh: On'),autoStatus=el('p','muted');
+  autoToggle.setAttribute('aria-pressed','true');autoStatus.setAttribute('role','status');
+  actions.append(connect,choose,refresh,disconnect,autoToggle);controls.append(autoStatus);controls.append(connection,actions);page.append(controls);
   const selectors=el('div','loadout-selectors');controls.append(selectors);
   function selector(labelText) {
     const label=el('label','filter-label',labelText);const select=el('select');select.setAttribute('aria-label',labelText);label.append(select);selectors.append(label);return select;
@@ -111,8 +116,9 @@ export async function loadout(manifest,params,{signal}={}) {
   const savedMeta=el('div','loadout-saved-meta');const gear=el('div','loadout-gear');page.append(savedMeta,gear);
   const clear=el('button','','Clear saved inventory');const confirmation=el('div','loadout-confirm');confirmation.hidden=true;
   const confirmClear=el('button','','Delete this saved account');const cancelClear=el('button','','Keep saved inventory');confirmation.append(el('p','','Delete the saved inventory for this account from this browser?'),confirmClear,cancelClear);controls.append(clear,confirmation);
-  const recommendationDisplays=new Set();
-  let auth,storage,inventory,compare,config,map,perkIcons={},tables=[],snapshot=null,memberships=[],membership=null,savedAccounts=[],entrySnapshot,entries=[],inventoryState={query:'',verdict:'all',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50},inventoryGeneration=0,inventoryControls=[],busy=false,disconnecting=false,operation,revision=0;
+  const recommendationDisplays=new Set(),discoveries=createInventorySession();
+  let scheduler;
+  let auth,storage,inventory,compare,config,map,perkIcons={},tables=[],snapshot=null,memberships=[],membership=null,savedAccounts=[],entrySnapshot,entries=[],inventoryState={query:'',verdict:'all',sort:'recommendations',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50},inventoryGeneration=0,inventoryControls=[],busy=false,disconnecting=false,operation,revision=0;
   const stopped=()=>signal?.aborted;
   const startupRevision=revision;const startupCurrent=()=>!stopped()&&revision===startupRevision;
   const cancel=()=>{revision++;operation?.abort();busy=false;};
@@ -254,23 +260,25 @@ export async function loadout(manifest,params,{signal}={}) {
     savedMeta.replaceChildren();gear.replaceChildren();recommendationDisplays.clear();confirmation.hidden=true;inventoryControls=[];
     const ownerSnapshot=snapshot,ownerRevision=revision,ownerGeneration=++inventoryGeneration;
     const current=()=>!stopped()&&snapshot===ownerSnapshot&&revision===ownerRevision&&inventoryGeneration===ownerGeneration;
-    // A replacement resets filters/page/details and builds each indexed comparison once.
+    // Regrade each replacement once; same-account refresh keeps the user's browsing choices.
     if(entrySnapshot!==snapshot){
-      inventoryState={query:'',verdict:'all',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50};
-      // Resolve the saved owner locally; replacement snapshots get fresh browsing defaults.
+      const sameAccount=snapshot&&accountKey(entrySnapshot)===accountKey(snapshot);
+      if(!sameAccount)inventoryState={query:'',verdict:'all',sort:'recommendations',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50};
+      // Display rebasing never turns a saved snapshot into newly discovered copies.
+      if(snapshot)discoveries.observe(snapshot);
       // Keep complete saved snapshots intact; only the displayed entries are weapon-only.
       const displaySnapshot=snapshot && inventory?.reconcileSavedInventory?inventory.reconcileSavedInventory(snapshot):snapshot;
       entries=displaySnapshot?buildEntries(displaySnapshot,comparison,manifest).filter(entry=>entry.type==='weapons'):[];
       entrySnapshot=snapshot;
-      inventoryState.characterId=locationScopes(entries,snapshot?.characters||[],snapshot?.selectedCharacterId).selectedCharacterId;
-      if(!snapshot?.characters?.length)inventoryState.tab='vault';
+      inventoryState.characterId=locationScopes(entries,snapshot?.characters||[],sameAccount?inventoryState.characterId:snapshot?.selectedCharacterId).selectedCharacterId;
+      if(!snapshot?.characters?.length&&inventoryState.tab==='characters')inventoryState.tab='vault';
     }
     if(!snapshot){gear.append(el('p','empty-state','No saved inventory selected. Connect, choose your Destiny account, then Refresh and Save.'));updateControls();return;}
     savedMeta.append(el('h2','','Saved inventory'),el('p','muted',`Account ${accountKey(snapshot)} · Saved in this browser; may be stale.\nLast saved: ${timestamp(snapshot.savedAt)}\nBungie response: ${timestamp(snapshot.responseMintedTimestamp)}${snapshot.secondaryComponentsMintedTimestamp?`\nSecondary components: ${timestamp(snapshot.secondaryComponentsMintedTimestamp)}`:''}\nSheet snapshot: ${timestamp(manifest.generated)}`));
     const counts={Vault:0,Carried:0,Postmaster:0,Other:0};
     // Global imported totals are distinct from the per-section browsing counts.
     for(const {item} of entries){const group=isPostmaster(item)?'Postmaster':String(item.location).toLowerCase()==='vault'?'Vault':item.characterId?'Carried':'Other';counts[group]++;}
-    savedMeta.append(el('p','loadout-inventory-count',`Saved weapons: ${entries.length.toLocaleString()} · ${Object.entries(counts).map(([label,count])=>`${label}: ${count.toLocaleString()}`).join(' · ')}\nLegendary weapons sort by matched recommendation count. Each nonempty field needs one listed option; selectable owned perks count. Equipped items are included in Carried.`));
+    savedMeta.append(el('p','loadout-inventory-count',`Saved weapons: ${entries.length.toLocaleString()} · ${Object.entries(counts).map(([label,count])=>`${label}: ${count.toLocaleString()}`).join(' · ')}\nDefault order is matched recommendation count. Each nonempty field needs one listed option; selectable owned perks count. Equipped items are included in Carried.`));
     if(!snapshot.characters.length)gear.append(el('p','muted','This saved profile has no characters. Vault and account weapons are still listed.'));
     // Keep the tab buttons attached while switching panels, preserving keyboard focus.
     const tabs=el('div','inventory-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Inventory storage');
@@ -301,9 +309,12 @@ export async function loadout(manifest,params,{signal}={}) {
     function filter(field,labelText,choices){
       const label=el('label','filter-label',labelText);const input=el('select');input.setAttribute('aria-label',labelText);
       for(const [value,text] of choices){const option=el('option','',text);option.value=value;input.append(option);}input.value=inventoryState[field];label.append(input);toolbar.append(label);inventoryControls.push({node:input});
-      input.onchange=()=>{if(!current()||busy)return;inventoryState[field]=input.value;resetPages();renderSections();};
+      input.onchange=()=>{if(!current()||busy||field==='sort'&&inventoryState.tab==='new')return;inventoryState[field]=input.value;resetPages();renderSections();};
+      return input;
     }
     filter('verdict','Recommendation match',[['all','All weapons'],['complete','Full matches'],['partial','Some matches'],['different','No matches'],['unscored','Unscored']]);
+    const sortControl=filter('sort','Sort inventory',[['recommendations','Recommendation matches'],['tier','Tier'],['power','Power level'],['newest','Newest']]);
+    inventoryControls.find(control=>control.node===sortControl).disabled=()=>inventoryState.tab==='new';
     search.oninput=()=>{if(!current()||busy)return;inventoryState.query=search.value;resetPages();renderSections();};
     const scopeHeading=el('div','inventory-scope-heading'),main=el('div','inventory-main'),auxiliary=el('div','inventory-auxiliary');
     panel.append(scopeHeading,main);gear.append(tabs,toolbar,panel,auxiliary);
@@ -317,6 +328,9 @@ export async function loadout(manifest,params,{signal}={}) {
       // Scope generation guards the selector; section generation guards rows and disclosure state.
       for(const tab of tabButtons){const selected=inventoryState.tab===tab.value;tab.node.setAttribute('aria-selected',String(selected));tab.node.setAttribute('tabindex',selected?'0':'-1');}
       panel.setAttribute('aria-labelledby',`inventory-tab-${inventoryState.tab}`);
+      sortControl.value=inventoryState.tab==='new'?'newest':inventoryState.sort;
+      // Newest is dedicated to the discovery feed, never a general inventory sort.
+      for(const option of sortControl.children)if(option.value==='newest')option.hidden=inventoryState.tab!=='new';
       scopeHeading.replaceChildren();characterControl=null;
       if(inventoryState.tab==='characters'&&snapshot.characters.length){
         const label=el('label','filter-label','Character'),selector=el('select');selector.setAttribute('aria-label','Inventory character');
@@ -342,8 +356,7 @@ export async function loadout(manifest,params,{signal}={}) {
       // One account-wide list reuses ranked entries; no location grouping or extra comparisons.
       const isNew=inventoryState.tab==='new';
       const title=isNew?'New weapons':inventoryState.tab==='vault'?'Vault':`${owner} — equipped and carried`;
-      if(isNew&&snapshot.previousRefresh)main.append(el('p','muted',`Compared with the previous saved refresh: ${timestamp(snapshot.previousRefresh.savedAt)}`));
-      const scopedEntries=isNew?newWeaponEntries(entries,snapshot.previousRefresh):inventoryState.tab==='vault'?scopes.vault:scopes.character;
+      const scopedEntries=isNew?discoveries.entries(snapshot,entries):inventoryState.tab==='vault'?scopes.vault:scopes.character;
       renderList(main,scopedEntries,'main',title,sectionCurrent);
       if(inventoryState.tab==='characters'&&scopes.postmaster.length)renderDisclosure(scopes.postmaster,'postmaster',`Postmaster · ${owner}`,sectionCurrent);
       if(!isNew&&scopes.other.length)renderDisclosure(scopes.other,'other','Account / other',sectionCurrent);
@@ -366,14 +379,14 @@ export async function loadout(manifest,params,{signal}={}) {
       inventoryControls.push({node:previous,disabled:()=>!selection||selection.page<=1},{node:next,disabled:()=>!selection||selection.page>=selection.pageCount});
       function renderRows(){
         if(!sectionCurrent())return;
-        selection=selectEntries(scopedEntries,{...inventoryState,page:inventoryState.pages[key]});inventoryState.pages[key]=selection.page;
+        selection=selectEntries(inventoryState.tab==='new'?scopedEntries:sortEntries(scopedEntries,inventoryState.sort),{...inventoryState,page:inventoryState.pages[key]});inventoryState.pages[key]=selection.page;
         // A stale page or scope cannot open details or navigate to its sheet row.
         const generation=++pageGeneration;const rowCurrent=()=>sectionCurrent()&&pageGeneration===generation;
         count.textContent=`${title}: Showing ${selection.from}–${selection.to} of ${selection.filteredCount.toLocaleString()} filtered / ${selection.totalCount.toLocaleString()} weapons · ${selection.completeCount.toLocaleString()} complete matches in this section`;
         list.replaceChildren(...selection.rows.map(entry=>inventoryRow(entry,rowCurrent)));
         if(!selection.rows.length){
           // A first/legacy save has no baseline; unchanged saves are a distinct empty state.
-          const empty=inventoryState.tab==='new'&&key==='main'?(!snapshot.previousRefresh?'No previous refresh is available. Refresh and Save again to compare newly added weapons.':!scopedEntries.length?'No new weapons since the previous saved refresh.':'No new weapons match these filters.'):!snapshot.characters.length&&inventoryState.tab==='characters'&&key==='main'?'This saved profile has no characters. Choose Vault to browse stored items.':'No weapons match these filters.';
+          const empty=inventoryState.tab==='new'&&key==='main'?(!scopedEntries.length?'No new weapons found during this tab session.':'No new weapons match these filters.'):!snapshot.characters.length&&inventoryState.tab==='characters'&&key==='main'?'This saved profile has no characters. Choose Vault to browse stored items.':'No weapons match these filters.';
           list.append(el('p','empty-state',empty));
         }
         // Page generation invalidates detached lazy details and their sheet references.
@@ -394,13 +407,18 @@ export async function loadout(manifest,params,{signal}={}) {
     if(value&&(!accountKey(value)||!Array.isArray(value.characters)||!Array.isArray(value.items)))throw new Error('Saved inventory has an unsupported format. Refresh this account to replace it; the saved data has been retained.');
     snapshot=value;renderGear();return true;
   }
-  async function run(action) {
-    if(busy||stopped())return;busy=true;const controller=new AbortController();operation=controller;const token=++revision;const current=()=>!stopped()&&!controller.signal.aborted&&revision===token;
+  async function run(action,externalSignal) {
+    if(externalSignal?.aborted)return 'cancelled';
+    if(busy||stopped())return 'skipped';busy=true;const controller=new AbortController();operation=controller;const token=++revision;const current=()=>!stopped()&&!controller.signal.aborted&&revision===token;
     // Bind each action to its own controller; disconnect invalidates its revision.
-    const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});updateControls();
-    try{await action(controller.signal,current);}catch(error){if(current())report(error.message||'The action failed. Your previous saved inventory is retained.',true);}
+    const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});
+    externalSignal?.addEventListener('abort',abort,{once:true});updateControls();
+    let outcome='cancelled';
+    try{const result=await action(controller.signal,current);outcome=current()?(result||'saved'):'cancelled';}
+    catch(error){outcome=current()?'failed':'cancelled';if(current())report(error.message||'The action failed. Your previous saved inventory is retained.',true);}
     // Rebind retained-snapshot handlers to the completed action's generation.
-    finally{signal?.removeEventListener('abort',abort);if(revision===token){busy=false;renderGear();}}
+    finally{signal?.removeEventListener('abort',abort);externalSignal?.removeEventListener('abort',abort);if(revision===token){busy=false;renderGear();}}
+    return outcome;
   }
   connect.onclick=()=>run(async()=>{snapshot=null;membership=null;memberships=[];options(membershipSelect,[],'Choose account',accountKey,accountKey);renderGear();report('Opening Bungie sign-in…');await auth.connect(config);});
   choose.onclick=()=>run(async(actionSignal,current)=>{
@@ -410,6 +428,7 @@ export async function loadout(manifest,params,{signal}={}) {
     // Persist the selected Destiny membership before reading account-partitioned data.
     if(primary){membership=primary;await auth.selectAccount(accountKey(membership));membershipSelect.value=accountKey(membership);if(!await readSaved(accountKey(membership),current))return;savedSelect.value=accountKey(snapshot);}
     if(!current())return;
+    scheduler?.reset();
     report(primary?'Destiny account selected. Refresh and Save to update inventory.':list.length?'Choose an account, then Refresh and Save.':'This session has no available Destiny memberships.');
   });
   membershipSelect.onchange=()=>run(async(_actionSignal,current)=>{
@@ -418,38 +437,53 @@ export async function loadout(manifest,params,{signal}={}) {
     snapshot=null;renderGear();
     if(membership){await auth.selectAccount(accountKey(membership));if(!await readSaved(accountKey(membership),current))return;}
     if(!current())return;
-    savedSelect.value=accountKey(snapshot);report('Account selected. Refresh and Save remains explicit.');
+    savedSelect.value=accountKey(snapshot);scheduler?.reset();report('Account selected. Inventory refreshes every two minutes while this page is visible and online.');
   });
   savedSelect.onchange=()=>run(async(_actionSignal,current)=>{
     const key=savedSelect.value;membership=null;membershipSelect.value='';snapshot=null;renderGear();
     if(key&&!await readSaved(key,current))return;
     if(!current())return;
-    report('Viewing saved offline inventory. Choose a connected account to refresh.');
+    scheduler?.reset();report('Viewing saved offline inventory. Choose a connected account to refresh.');
   });
-  refresh.onclick=()=>run(async(actionSignal,current)=>{
-    // Capture the account at the start; only a complete import may reach storage.
-    const selected=membership;report('Reading inventory… Previous saved inventory is retained until the completed import saves.');
-    const next=await inventory.importInventory(config,selected,{signal:actionSignal,onProgress:progress=>{if(current())report(typeof progress==='string'?progress:progress?.message||'Reading inventory and item definitions…');}});
-    // A disconnected or superseded action cannot commit gear from its old account.
-    if(!current())return;
-    if(accountKey(next)!==accountKey(selected))throw new Error('The import returned a different account. Nothing was saved.');
-    if(!Number.isFinite(Date.parse(next.responseMintedTimestamp)))throw new Error('The import has no valid Bungie timestamp. Nothing was saved.');
-    if(!Array.isArray(next.characters)||!Array.isArray(next.items))throw new Error('The import is incomplete. Nothing was saved.');
-    // Storage owns atomicity, freshness and cancellation up to transaction commit.
-    const committed=await storage.saveSnapshot(next,{signal:actionSignal});if(!current())return;
-    snapshot=committed||next;renderGear();report('Saved. This inventory is available offline in this browser.');
-    try{await savedList(current);}catch{if(current())report('Inventory saved, but the saved-account list could not be updated.',true);}
-  });
+  function refreshInventory({signal:refreshSignal}={}){
+    // Read the live session again at dispatch; stale local membership is never sufficient.
+    const session=auth?.getSession(),key=accountKey(membership);
+    if(!key||session?.selectedAccount!==key||!session.memberships?.some(value=>accountKey(value)===key)||!config||!inventory||!storage)return Promise.resolve('skipped');
+    return run(async(actionSignal,current)=>{
+      // Capture the account at the start; only a complete import may reach storage.
+      const selected=membership;
+      const ownsAccount=()=>current()&&accountKey(membership)===key&&auth.getSession()?.selectedAccount===key;
+      report('Reading inventory… Previous saved inventory is retained until the completed import saves.');
+      const next=await inventory.importInventory(config,selected,{signal:actionSignal,onProgress:progress=>{if(ownsAccount())report(typeof progress==='string'?progress:progress?.message||'Reading inventory and item definitions…');}});
+      // A disconnected or superseded action cannot commit gear from its old account.
+      if(!ownsAccount())return 'cancelled';
+      if(accountKey(next)!==accountKey(selected))throw new Error('The import returned a different account. Nothing was saved.');
+      if(!Number.isFinite(Date.parse(next.responseMintedTimestamp)))throw new Error('The import has no valid Bungie timestamp. Nothing was saved.');
+      if(!Array.isArray(next.characters)||!Array.isArray(next.items))throw new Error('The import is incomplete. Nothing was saved.');
+      // Storage owns atomicity, freshness and cancellation up to transaction commit.
+      const committed=await storage.saveSnapshot(next,{signal:actionSignal});if(!ownsAccount())return 'cancelled';
+      snapshot=committed||next;discoveries.observe(snapshot,{committed:true});renderGear();report('Saved. This inventory is available offline in this browser.');
+      try{await savedList(ownsAccount);}catch{if(ownsAccount())report('Inventory saved, but the saved-account list could not be updated.',true);}
+      return ownsAccount()?'saved':'cancelled';
+    },refreshSignal);
+  }
+  refresh.onclick=async()=>{
+    const owner=accountKey(membership),outcome=await refreshInventory();
+    if(!stopped()&&owner===accountKey(membership)&&auth?.getSession()?.selectedAccount===owner)scheduler?.completed(outcome);
+    return outcome;
+  };
   disconnect.onclick=async()=>{
     cancel();const token=revision;const current=()=>!stopped()&&revision===token;
     busy=true;disconnecting=true;updateControls();
-    try{await auth.disconnect();if(!current())return;membership=null;memberships=[];options(membershipSelect,[],'Choose account',accountKey,accountKey);report('Disconnected. The labelled saved inventory is still available offline.');}
+    try{await auth.disconnect();if(!current())return;membership=null;memberships=[];scheduler?.reset();options(membershipSelect,[],'Choose account',accountKey,accountKey);report('Disconnected. The labelled saved inventory is still available offline.');}
     catch(error){if(current())report(error.message,true);}
     finally{if(current()){busy=false;disconnecting=false;renderGear();}}
   };
   clear.onclick=()=>{confirmation.hidden=false;confirmClear.focus();};cancelClear.onclick=()=>{confirmation.hidden=true;clear.focus();};
   confirmClear.onclick=()=>run(async(_actionSignal,current)=>{
-    const key=accountKey(snapshot);await storage.clearSnapshot(key);if(!current())return;
+    const key=accountKey(snapshot);await storage.clearSnapshot(key);
+    // Completed deletion clears account evidence even if the old view has been left.
+    discoveries.clear(key);if(!current())return;
     snapshot=null;renderGear();if(!await savedList(current))return;
     report('Saved inventory cleared for this account.');clear.focus();
   });
@@ -508,5 +542,20 @@ export async function loadout(manifest,params,{signal}={}) {
   if(!auth||!inventory)errors.push('Account modules are unavailable. Connection and refresh require the account integration.');
   if(!map?.integrityVerified||!compare)errors.push(integrityError?.message||'The local comparison map or tables are unavailable. Saved gear can still be reviewed.');
   if(errors.length)report(errors.join('\n'),true);else report(membership?'Account selected from this session. Refresh and Save to update inventory.':'Showing local saved data. Choose account and Refresh and Save to update it.');
+  // A mounted visible inventory page owns one scheduler; route abort disposes it.
+  scheduler=createAutoRefresh({signal,refresh:refreshInventory,
+    eligible:()=>!busy&&!insecureHttp&&Boolean(config&&inventory&&storage&&membership&&auth?.getSession())&&globalThis.document?.visibilityState==='visible'&&globalThis.navigator?.onLine!==false,
+    onStatus:state=>{
+      if(stopped())return;
+      autoToggle.textContent=`Auto refresh: ${state.enabled?'On':'Off'}`;
+      autoToggle.setAttribute('aria-pressed',String(state.enabled));
+      autoStatus.textContent=state.enabled
+        ?state.running?'Refreshing inventory…'
+          :state.failures?'Auto refresh paused after a failed attempt; retrying with a longer interval.'
+            :'Auto refresh every 2 minutes while visible and online.'
+        :'Auto refresh is off.';
+    }
+  });
+  let autoEnabled=true;autoToggle.onclick=()=>{autoEnabled=!autoEnabled;scheduler.setEnabled(autoEnabled);};
   updateControls();return page;
 }
