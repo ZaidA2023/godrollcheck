@@ -122,9 +122,10 @@ export function analyzeSockets(rawItem, weapon, sockets, reusable, lookup) {
     const values = runtimeAlternatesPresent ? runtime : fixedChoices(rawItem,entry,sockets?.[index],lookup);
     // Instance choices remain valid on crafted copies; never substitute a definition pool.
     const rolled = !!rawItem.itemInstanceId && Number.isInteger(rawItem.state) && rawItem.state >= 0;
+    // Hidden upgrade sockets can expose every stat type without offering roll choices.
     const alternates = Array.isArray(values) ? values.filter(p => String(p.plugItemHash) !== selected?.plugHash).map(p => {
       const def = lookup(ITEM,p.plugItemHash), supported = category(def,type) === role;
-      return plugValue(p.plugItemHash,def,{canInsert:p.canInsert,enabled:p.enabled,enableFailIndexes:p.enableFailIndexes || [],insertFailIndexes:p.insertFailIndexes || [],...(p.evidenceSource === 'fixed-definition' ? {evidenceSource:p.evidenceSource} : {}),ownership:rolled && supported ? 'rolled' : 'unknown',selectable:rolled && supported && p.canInsert === true && p.enabled === true && !(p.enableFailIndexes?.length) && !(p.insertFailIndexes?.length)},lookup,role);
+      return plugValue(p.plugItemHash,def,{canInsert:p.canInsert,enabled:p.enabled,enableFailIndexes:p.enableFailIndexes || [],insertFailIndexes:p.insertFailIndexes || [],...(p.evidenceSource === 'fixed-definition' ? {evidenceSource:p.evidenceSource} : {}),ownership:rolled && supported ? 'rolled' : 'unknown',selectable:rolled && supported && sockets?.[index]?.isVisible !== false && p.canInsert === true && p.enabled === true && !(p.enableFailIndexes?.length) && !(p.insertFailIndexes?.length)},lookup,role);
     }) : [];
     fields[field] = {socketIndex:index,selected,alternates,status,runtimeAlternatesPresent,alternateStatus:(runtimeAlternatesPresent || values.length > 0) && rolled ? 'resolved' : 'unknown'};
   }
