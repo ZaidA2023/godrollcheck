@@ -47,7 +47,7 @@ try {
       const tab=isHome||isLoadout?null:await load(meta.id);if(version!==generation)return;
       const renderer={weapon:weapons,reference,status,changelog}[meta.kind];
       // Await personal views so stale routes cannot replace the current page.
-      const content=isLoadout?await (await import('./views/loadout.js?v=20261008-perk-choices')).loadout(manifest,params,{signal}):isHome?home(manifest):await renderer(tab,meta,manifest,params);
+      const content=isLoadout?await (await import('./views/loadout.js?v=20261008-inventory-tabs')).loadout(manifest,params,{signal}):isHome?home(manifest):await renderer(tab,meta,manifest,params);
       if(version!==generation||signal.aborted)return;
       app.replaceChildren(content);document.title=`${meta.title} · Endgame Analysis`;
       nav.querySelectorAll('a').forEach(a=>{const current=isHome?a.dataset.home==='true':a.dataset.tab===meta.id;a.classList.toggle('active',current);if(current)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});

@@ -133,7 +133,8 @@ export async function loadout(manifest,params,{signal}={}) {
     connection.textContent=session?(membership?`Connected session · Destiny account ${accountKey(membership)}.`:'Connected session. Choose a Destiny account before refreshing.'):'Disconnected. Saved inventory remains available offline.';
     connect.disabled=busy||insecureHttp||!auth||!config;choose.disabled=busy||insecureHttp||!session||!config;refresh.disabled=busy||insecureHttp||!session||!membership||!inventory||!storage||!config;
     disconnect.disabled=!session||disconnecting;membershipSelect.disabled=busy||!memberships.length;savedSelect.disabled=busy||!savedAccounts.length;clear.disabled=busy||!snapshot||!storage;
-    for(const {node,disabled} of inventoryControls)node.disabled=busy||Boolean(disabled?.());
+    // Browsing the last complete inventory is safe while account work is pending.
+    for(const {node,disabled} of inventoryControls)node.disabled=Boolean(disabled?.());
     page.setAttribute('aria-busy',String(busy));
   }
   async function savedList(current=()=>!stopped()) {
@@ -258,8 +259,9 @@ export async function loadout(manifest,params,{signal}={}) {
   }
   function renderGear() {
     savedMeta.replaceChildren();gear.replaceChildren();recommendationDisplays.clear();confirmation.hidden=true;inventoryControls=[];
-    const ownerSnapshot=snapshot,ownerRevision=revision,ownerGeneration=++inventoryGeneration;
-    const current=()=>!stopped()&&snapshot===ownerSnapshot&&revision===ownerRevision&&inventoryGeneration===ownerGeneration;
+    const ownerSnapshot=snapshot,ownerGeneration=++inventoryGeneration;
+    // Account-action revisions do not invalidate this read-only snapshot view.
+    const current=()=>!stopped()&&snapshot===ownerSnapshot&&inventoryGeneration===ownerGeneration;
     // Regrade each replacement once; same-account refresh keeps the user's browsing choices.
     if(entrySnapshot!==snapshot){
       const sameAccount=snapshot&&accountKey(entrySnapshot)===accountKey(snapshot);
@@ -286,7 +288,7 @@ export async function loadout(manifest,params,{signal}={}) {
     const tabButtons=[];
     const resetPages=()=>{inventoryState.pages={main:1,postmaster:1,other:1};};
     function switchTab(tab){
-      if(!current()||busy||inventoryState.tab===tab)return;
+      if(!current()||inventoryState.tab===tab)return;
       inventoryState.tab=tab;resetPages();inventoryState.disclosures={};renderScope();
     }
     for(const [value,label] of [['characters','Characters'],['vault','Vault'],['new','New weapons']]){
@@ -295,7 +297,7 @@ export async function loadout(manifest,params,{signal}={}) {
       button.onclick=()=>switchTab(value);tabButtons.push({node:button,value});tabs.append(button);inventoryControls.push({node:button});
       // Automatic activation wraps across all tabs without detaching focus.
       button.addEventListener('keydown',event=>{
-        if(!current()||busy)return;
+        if(!current())return;
         const index=tabButtons.findIndex(tab=>tab.node===button);
         const count=tabButtons.length;
         const next=event.key==='Home'?0:event.key==='End'?count-1:event.key==='ArrowLeft'?(index+count-1)%count:event.key==='ArrowRight'?(index+1)%count:null;
@@ -309,13 +311,13 @@ export async function loadout(manifest,params,{signal}={}) {
     function filter(field,labelText,choices){
       const label=el('label','filter-label',labelText);const input=el('select');input.setAttribute('aria-label',labelText);
       for(const [value,text] of choices){const option=el('option','',text);option.value=value;input.append(option);}input.value=inventoryState[field];label.append(input);toolbar.append(label);inventoryControls.push({node:input});
-      input.onchange=()=>{if(!current()||busy||field==='sort'&&inventoryState.tab==='new')return;inventoryState[field]=input.value;resetPages();renderSections();};
+      input.onchange=()=>{if(!current()||field==='sort'&&inventoryState.tab==='new')return;inventoryState[field]=input.value;resetPages();renderSections();};
       return input;
     }
     filter('verdict','Recommendation match',[['all','All weapons'],['complete','Full matches'],['partial','Some matches'],['different','No matches'],['unscored','Unscored']]);
     const sortControl=filter('sort','Sort inventory',[['recommendations','Recommendation matches'],['tier','Tier'],['power','Power level'],['newest','Newest']]);
     inventoryControls.find(control=>control.node===sortControl).disabled=()=>inventoryState.tab==='new';
-    search.oninput=()=>{if(!current()||busy)return;inventoryState.query=search.value;resetPages();renderSections();};
+    search.oninput=()=>{if(!current())return;inventoryState.query=search.value;resetPages();renderSections();};
     const scopeHeading=el('div','inventory-scope-heading'),main=el('div','inventory-main'),auxiliary=el('div','inventory-auxiliary');
     panel.append(scopeHeading,main);gear.append(tabs,toolbar,panel,auxiliary);
     // Re-register only current section controls; detached page buttons are never enabled again.
@@ -338,7 +340,7 @@ export async function loadout(manifest,params,{signal}={}) {
         // Reuse the attached selector through character changes to preserve its focus.
         selector.value=inventoryState.characterId;label.append(selector);scopeHeading.append(label);characterControl={node:selector};
         selector.onchange=()=>{
-          if(!scopeCurrent()||busy||!snapshot.characters.some(character=>String(character.id)===selector.value))return;
+          if(!scopeCurrent()||!snapshot.characters.some(character=>String(character.id)===selector.value))return;
           inventoryState.characterId=selector.value;resetPages();inventoryState.disclosures={};
           scopes=locationScopes(entries,snapshot.characters,inventoryState.characterId);renderSections();
         };
@@ -391,8 +393,8 @@ export async function loadout(manifest,params,{signal}={}) {
         }
         // Page generation invalidates detached lazy details and their sheet references.
         pageLabel.textContent=`Page ${selection.page} of ${selection.pageCount}`;
-        previous.onclick=()=>{if(!rowCurrent()||busy||selection.page<=1)return;inventoryState.pages[key]=selection.page-1;renderRows();};
-        next.onclick=()=>{if(!rowCurrent()||busy||selection.page>=selection.pageCount)return;inventoryState.pages[key]=selection.page+1;renderRows();};
+        previous.onclick=()=>{if(!rowCurrent()||selection.page<=1)return;inventoryState.pages[key]=selection.page-1;renderRows();};
+        next.onclick=()=>{if(!rowCurrent()||selection.page>=selection.pageCount)return;inventoryState.pages[key]=selection.page+1;renderRows();};
         updateControls();
       }
       renderRows();
