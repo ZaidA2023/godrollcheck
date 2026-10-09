@@ -495,7 +495,7 @@ export async function loadout(manifest,params,{signal}={}) {
     for(const display of recommendationDisplays)if(display.current())recommendedPerks(display.field,display.values,perkIcons,display.line);
   }).catch(()=>{/* Names and grades remain usable without icons. */});
   // Loading modules and local JSON is safe on entry; never resolve memberships here.
-  const dependencies=await Promise.allSettled([import('../account/auth.js'),import('../account/storage.js'),import('../account/inventory.js'),import('../account/compare.js'),import('../account/config.js'),load('bungie-map')]);
+  const dependencies=await Promise.allSettled([import('../account/auth.js'),import('../account/storage.js'),import('../account/inventory.js?v=20261008-perk-choices'),import('../account/compare.js'),import('../account/config.js'),load('bungie-map')]);
   if(stopped())return page;
   [auth,storage,inventory,compare,,map]=dependencies.map(r=>r.status==='fulfilled'?r.value:null);
   const configuration=dependencies[4].status==='fulfilled'?dependencies[4].value:null;
