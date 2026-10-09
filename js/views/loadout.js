@@ -118,7 +118,7 @@ export async function loadout(manifest,params,{signal}={}) {
   const confirmClear=el('button','','Delete this saved account');const cancelClear=el('button','','Keep saved inventory');confirmation.append(el('p','','Delete the saved inventory for this account from this browser?'),confirmClear,cancelClear);controls.append(clear,confirmation);
   const recommendationDisplays=new Set(),discoveries=createInventorySession();
   let scheduler;
-  let auth,storage,inventory,compare,config,map,perkIcons={},tables=[],snapshot=null,memberships=[],membership=null,savedAccounts=[],entrySnapshot,entries=[],inventoryState={query:'',verdict:'all',sort:'recommendations',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50},inventoryGeneration=0,inventoryControls=[],busy=false,disconnecting=false,operation,revision=0;
+  let auth,storage,inventory,compare,config,map,perkIcons={},tables=[],snapshot=null,memberships=[],membership=null,savedAccounts=[],entrySnapshot,entries=[],inventoryState={query:'',verdict:'all',sort:'recommendations',tab:'new',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50},inventoryGeneration=0,inventoryControls=[],busy=false,disconnecting=false,operation,revision=0;
   const stopped=()=>signal?.aborted;
   const startupRevision=revision;const startupCurrent=()=>!stopped()&&revision===startupRevision;
   const cancel=()=>{revision++;operation?.abort();busy=false;};
@@ -263,7 +263,7 @@ export async function loadout(manifest,params,{signal}={}) {
     // Regrade each replacement once; same-account refresh keeps the user's browsing choices.
     if(entrySnapshot!==snapshot){
       const sameAccount=snapshot&&accountKey(entrySnapshot)===accountKey(snapshot);
-      if(!sameAccount)inventoryState={query:'',verdict:'all',sort:'recommendations',tab:'characters',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50};
+      if(!sameAccount)inventoryState={query:'',verdict:'all',sort:'recommendations',tab:'new',characterId:null,pages:{main:1,postmaster:1,other:1},disclosures:{},pageSize:50};
       // Display rebasing never turns a saved snapshot into newly discovered copies.
       if(snapshot)discoveries.observe(snapshot);
       // Keep complete saved snapshots intact; only the displayed entries are weapon-only.
