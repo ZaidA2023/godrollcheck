@@ -1,5 +1,5 @@
 // Account snapshots, cache entries and selection commit in one IndexedDB transaction.
-import {getSession, selectAccount, operationSignal} from './auth.js';
+import {getSession, selectAccount, operationSignal, savedSnapshotEpoch, withConnectionLock} from './auth.js';
 const DB_NAME = 'endgame-loadout', VERSION = 1;
 function open() {
   return new Promise((resolve, reject) => {
@@ -68,6 +68,7 @@ export async function loadSnapshot(accountKey) {
   return withPreviousRefresh(record.snapshot,record.previous);
 }
 export async function saveSnapshot(snapshot, {signal} = {}) {
+  const connectionEpoch=savedSnapshotEpoch(snapshot);
   // Clone before yielding so caller mutations cannot diverge snapshot/cache content.
   snapshot = structuredClone(validateSnapshot(snapshot));
   // Derived browsing metadata is never hashed into snapshots or recursively retained.
@@ -81,7 +82,8 @@ export async function saveSnapshot(snapshot, {signal} = {}) {
     operation.signal.throwIfAborted();
     db = await open();
     operation.signal.throwIfAborted();
-    await new Promise((resolve, reject) => {
+    await withConnectionLock(connectionEpoch,()=>new Promise((resolve, reject) => {
+      operation.assertCurrent();
       const tx = db.transaction(['snapshots','definitions','local'], 'readwrite');
       let failure;
       const cancel = () => { failure = operation.signal.reason; tx.abort(); };
@@ -105,10 +107,10 @@ export async function saveSnapshot(snapshot, {signal} = {}) {
         for (const entry of snapshot.definitions) tx.objectStore('definitions').put(entry);
         tx.objectStore('local').put({key:'selectedAccount',value:snapshot.accountKey});
       };
-    });
+    }),operation.signal);
     // Remember a successful explicit refresh for reload; this never resolves memberships.
     const session = getSession();
-    if (session?.memberships?.some(m => `${m.membershipType}:${m.membershipId}` === snapshot.accountKey)) selectAccount(snapshot.accountKey);
+    if (!connectionEpoch && session?.kind!=='backend' && session?.memberships?.some(m => `${m.membershipType}:${m.membershipId}` === snapshot.accountKey)) await selectAccount(snapshot.accountKey);
     return await withPreviousRefresh(snapshot,previous);
   } finally { db?.close(); operation.dispose(); }
 }

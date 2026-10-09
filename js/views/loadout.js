@@ -408,7 +408,7 @@ export async function loadout(manifest,params,{signal}={}) {
     memberships=list;membership=null;snapshot=null;renderGear();options(membershipSelect,list,'Choose Destiny account',accountKey,m=>`${m.displayName||'Destiny account'} · ${accountKey(m)}`);
     const selected=auth.getSession()?.selectedAccount;const primary=list.find(m=>accountKey(m)===selected)||(list.length===1?list[0]:null);
     // Persist the selected Destiny membership before reading account-partitioned data.
-    if(primary){membership=primary;auth.selectAccount(accountKey(membership));membershipSelect.value=accountKey(membership);if(!await readSaved(accountKey(membership),current))return;savedSelect.value=accountKey(snapshot);}
+    if(primary){membership=primary;await auth.selectAccount(accountKey(membership));membershipSelect.value=accountKey(membership);if(!await readSaved(accountKey(membership),current))return;savedSelect.value=accountKey(snapshot);}
     if(!current())return;
     report(primary?'Destiny account selected. Refresh and Save to update inventory.':list.length?'Choose an account, then Refresh and Save.':'This session has no available Destiny memberships.');
   });
@@ -416,7 +416,7 @@ export async function loadout(manifest,params,{signal}={}) {
     membership=memberships.find(m=>accountKey(m)===membershipSelect.value)||null;
     // Account selection cancels prior account operations and never relabels old gear.
     snapshot=null;renderGear();
-    if(membership){auth.selectAccount(accountKey(membership));if(!await readSaved(accountKey(membership),current))return;}
+    if(membership){await auth.selectAccount(accountKey(membership));if(!await readSaved(accountKey(membership),current))return;}
     if(!current())return;
     savedSelect.value=accountKey(snapshot);report('Account selected. Refresh and Save remains explicit.');
   });

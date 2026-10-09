@@ -1,6 +1,6 @@
 // Import is explicit and read-only; persistence belongs to the caller after validation.
 import {createClient, PROFILE_COMPONENTS, mapLimit} from './bungie.js';
-import {getSession, operationSignal, validateConfig} from './auth.js';
+import {getSession, operationSignal, validateConfig, ensureAccess, tagSnapshotEpoch} from './auth.js';
 import {loadDefinitions, validateSnapshot} from './storage.js';
 const ITEM = 'DestinyInventoryItemDefinition', BUCKET = 'DestinyInventoryBucketDefinition', SOCKET = 'DestinySocketTypeDefinition', STAT = 'DestinyStatDefinition', SET = 'DestinyPlugSetDefinition';
 const FIELDS = ['perk1','perk2','barrel','mag','masterwork','originTrait'];
@@ -244,16 +244,17 @@ export async function importInventory(config, membership, {signal,onProgress} = 
   validateConfig(config);
   stringId(membership?.membershipId,'membership');
   required([1,2,3,4,5,6].includes(membership.membershipType),'unsupported membership type');
-  const session = getSession(); if (!session) throw new Error('Reconnect to Bungie before refreshing inventory.');
-  // Imported membership must belong to the cached connected account.
-  if (!session.memberships?.some(m => m.membershipId === membership.membershipId && m.membershipType === membership.membershipType)) throw new Error('Choose a membership belonging to the connected account.');
+  if(!getSession())throw new Error('Reconnect to Bungie before refreshing inventory.');
   // Refuse parallel refreshes before starting any reads or definition-cache work.
   importing = true;
   const operation = operationSignal(signal), controller = new AbortController();
   const cancel = () => controller.abort(operation.signal.reason);
   operation.signal.addEventListener('abort',cancel,{once:true}); if (operation.signal.aborted) cancel();
-  const client = createClient(config,{signal:controller.signal,token:session.accessToken});
   try {
+    const session=await ensureAccess(config,{signal:controller.signal});operation.assertCurrent();
+    // Renewal does not permit reading any membership outside the connected account.
+    if(!session.memberships?.some(m=>m.membershipId===membership.membershipId&&m.membershipType===membership.membershipType))throw new Error('Choose a membership belonging to the connected account.');
+    const client=createClient(config,{signal:controller.signal,token:session.accessToken});
     onProgress?.({phase:'manifest',message:'Reading Bungie manifest version.'});
     const manifest = await client.request('/Platform/Destiny2/Manifest/');
     required(typeof manifest.version === 'string' && manifest.version,'manifest version missing');
@@ -322,7 +323,7 @@ export async function importInventory(config, membership, {signal,onProgress} = 
     const selectedDefinitions = new Map([...definitions].filter(([key]) => used.has(key)));
     const snapshot = normalizeProfile(profile,{...membership,bungieMembershipId:session.bungieMembershipId},version,selectedDefinitions);
     onProgress?.({phase:'complete',message:'Inventory complete. Ready to save.'});
-    return snapshot;
+    operation.assertCurrent();return tagSnapshotEpoch(snapshot,operation.epoch??null);
   } catch (error) { controller.abort(error); throw error; }
   finally { operation.signal.removeEventListener('abort',cancel); operation.dispose(); importing = false; }
 }

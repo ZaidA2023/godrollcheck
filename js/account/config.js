@@ -1,3 +1,4 @@
+import {backendOrigin} from './backend-auth.js';
 import {callbackPath} from './callback-path.js';
 // Public application metadata contains no account token or client secret.
 export async function loadConfig() {
@@ -20,7 +21,7 @@ export async function loadConfig() {
   // The registered destination is fixed; incoming query parameters are separate.
   const redirect = new URL(config.redirectUri);
   if (redirect.origin !== origin || redirect.pathname !== registeredPath || redirect.search || redirect.hash) throw new Error('The Bungie callback configuration is invalid.');
-  return {apiKey: config.apiKey, clientId: String(config.clientId), origin, basePath:config.basePath??'/', redirectUri: redirect.href};
+  return {...(config.authBackend?{authBackend:backendOrigin(config.authBackend)}:{}),apiKey: config.apiKey, clientId: String(config.clientId), origin, basePath:config.basePath??'/', redirectUri: redirect.href};
 }
 
 // Validate the exact recommendation bytes that were independently audited.

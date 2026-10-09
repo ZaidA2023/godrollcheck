@@ -3,5 +3,6 @@
   "clientId": "55490",
   "origin": "https://zaida2023.github.io",
   "redirectUri": "https://zaida2023.github.io/godrollcheck/oauth-callback.html",
-  "basePath": "/godrollcheck/"
+  "basePath": "/godrollcheck/",
+  "authBackend": "https://godrollcheck-auth.zaida2023.workers.dev"
 }
